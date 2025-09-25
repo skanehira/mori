@@ -1,0 +1,8 @@
+[package]
+name = "mori"
+version = "0.0.1"
+authors = ["skanehira"]
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.42", features = ["derive"] }
