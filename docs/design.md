@@ -21,14 +21,14 @@
 - CLI ルートコマンド: `mori [flags] -- <command> [args...]`
 - サポートするのは allow 系フラグのみ。deny 系フラグを指定された場合はエラー終了。
 - FQDN / IP / CIDR を許可先として指定可能にし、macOS / Linux 両方で同じ表現が使えるようにする。
-- 設定ファイル（YAML/TOML 予定）を読み込み、CLI フラグと同じポリシーを記述できるようにする。CLI が優先。
+- 設定ファイル（YAML 固定）を読み込み、CLI フラグと同じポリシーを記述できるようにする。CLI が優先。
 - システムライブラリ（dylib 等）は暗黙に許可する。
 
 ---
 
 ## アーキテクチャ概要
-- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、共通中間表現 `CliPolicy` を構築する（詳細は `docs/cli_architecture.md` 参照）。
-- OS ごとの実装は `CliPolicy` を受け取り、各 OS 用のポリシー（Landlock ルール、eBPF マップ、sandbox-exec プロファイル）へ変換する。
+- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、共通中間表現 `Policy` を構築する（詳細は `docs/cli_architecture.md` 参照）。
+- OS ごとの実装は `Policy` を受け取り、各 OS 用のポリシー（Landlock ルール、eBPF マップ、sandbox-exec プロファイル）へ変換する。
 
 ### Linux 側 (eBPF + Hickory)
 ```
@@ -99,7 +99,7 @@
 
 ### 共通機能
 - CLI は OS を自動判定し、内部実装を切り替える。
-- `CliPolicy` を OS 別実装へ渡す共通モジュールを提供する。
+- `Policy` を OS 別実装へ渡す共通モジュールを提供する。
 - 拒否イベントや内部エラーを構造化ログで出力し、必要に応じて JSON / 人間可読形式を選択できるようにする。
 - 未定義フラグや設定値エラーは即時エラー終了。
 
@@ -111,6 +111,21 @@
   - `include_bytes_aligned!(env!("BPF_ELF_PATH"))` で埋め込み
   - 実行時に外部ファイル不要
 - macOS では `sandbox-exec` が利用可能な環境であることを前提とする。
+
+---
+
+## 依存ライブラリのバージョン固定と更新ポリシー
+- **Rust クレート**
+  - `Cargo.lock` でバージョン固定。`clap` / `serde` / `serde_yaml` / `aya` / `aya-bpf` といった主要依存はセマンティックバージョニングに従いパッチ更新は随時反映、マイナー以上の更新は兼互換性の確認後に採用する。
+  - eBPF/Landlock 周辺 (`aya` 系) はカーネル互換の影響が大きいため、メジャーアップデートは専用ブランチで検証してからマージする。
+  - `cargo update -p <crate>` で個別更新→`cargo test` と macOS / Linux スモークテストを必須化する。
+- **システムパッケージ**
+  - Ubuntu VM: `clang`, `llvm`, `bpftool`, `libbpf-dev` は OS の LTS リポジトリを利用し、セキュリティアップデートのみ追従。`linux-headers` が入手できない場合はソースヘッダーをマウントするなど代替策を採用。
+  - macOS: Homebrew で `llvm`、`rustup` をインストールし、`rustup` の stable チャンネルを四半期ごとに更新チェック。`sandbox-exec` の非推奨化動向もウォッチする。
+- **更新フロー**
+  1. 更新候補を issue 化し、影響範囲を記載。
+  2. 依存更新を反映後、`cargo test` + 主要スモークテスト（macOS / Ubuntu）を実行。
+  3. 挙動差が出た場合は回帰テストを追加し、`CHANGELOG` に更新理由と影響範囲を残す。
 
 ---
 
@@ -144,7 +159,7 @@
 ---
 
 ## 今後の検討事項
-- 設定ファイルフォーマットの詳細設計（YAML/TOML、スキーマ、バリデーション）
+- 設定ファイルフォーマットの詳細設計（YAML スキーマ、バリデーション）
 - UDP / QUIC など TCP 以外のプロトコル制御
 - 拒否イベントの可視化（レポートコマンド、GUI 連携など）
 - Landlock 非対応カーネルや sandbox-exec 非搭載環境へのフォールバック

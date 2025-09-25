@@ -8,7 +8,7 @@
 - Linux 側は Landlock ルールセットを生成し、`RestrictSelf` 後にコマンドを `exec`。
 
 ## mori への取り込み方針
-- mori も単一バイナリで macOS / Linux を切り替える構成とし、`CliPolicy` を各 OS 実装へ渡す設計とする。
+- mori も単一バイナリで macOS / Linux を切り替える構成とし、`Policy` を各 OS 実装へ渡す設計とする。
 - ファイル書き込み制御は cage と同じ allow リスト方式を Landlock / sandbox-exec にマッピングする。
 - cage の `-allow`, `-preset` などは直接は採用せず、mori 独自の allow 系フラグ（sbx 参照）＋設定ファイルで管理する。
 - プロセス実行は cage と同様 `exec` 相当で置き換える流れを維持し、エージェント用途で環境変数を付与する（例: `IN_MORI=1`）。
@@ -24,9 +24,3 @@
 - CLI / 設定から収集した `allow_paths_*` を `PathBeneath` へ変換し、読み取り・書き込み権限を個別に付与する。
 - Landlock 非対応カーネルの場合はエラーを返し、MVP の前提条件として明記する。
 - `restrict_self()` 前に DNS 解決など必要なセットアップを完了させる（Landlock 適用後は新規ファイルアクセスが制限されるため）。
-
-## 次のアクション
-- 暗黙許可リスト（演算に必要なシステムディレクトリ）の草案作成。
-- macOS 向け sandbox-exec S式生成ロジックの雛形を cage を参考に設計。
-- Landlock へのマッピングコード（Rust）と macOS プロファイル生成コードの骨格を CLI 層から分離する。
-
