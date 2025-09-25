@@ -27,7 +27,7 @@
 ---
 
 ## アーキテクチャ概要
-- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、共通中間表現 `CliPolicy` を構築する。
+- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、共通中間表現 `CliPolicy` を構築する（詳細は `docs/cli_architecture.md` 参照）。
 - OS ごとの実装は `CliPolicy` を受け取り、各 OS 用のポリシー（Landlock ルール、eBPF マップ、sandbox-exec プロファイル）へ変換する。
 
 ### Linux 側 (eBPF + Hickory)
