@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[cfg(target_os = "linux")]
-use aya::{EbpfError, programs::ProgramError};
+use aya::{EbpfError, maps::MapError, programs::ProgramError};
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Error)]
@@ -28,6 +28,9 @@ pub enum MoriError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("eBPF map error: {0}")]
+    Map(#[from] MapError),
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -1,8 +1,18 @@
-use std::{convert::TryInto, os::fd::BorrowedFd};
+use std::{
+    convert::TryInto,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    net::Ipv4Addr,
+    os::fd::{AsRawFd, BorrowedFd},
+    path::PathBuf,
+    process::{self, Command, Stdio},
+};
 
 use aya::{
-    Ebpf, include_bytes_aligned,
+    include_bytes_aligned,
+    maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
+    Ebpf,
 };
 
 use crate::error::MoriError;
@@ -10,8 +20,67 @@ use crate::error::MoriError;
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4", "mori_connect6"];
 
+// Key structures that match the eBPF program definitions
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Ipv4Key {
+    pub addr: u32, // IPv4 address in network byte order
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Ipv6Key {
+    pub addr: [u32; 4], // IPv6 address in network byte order
+}
+
+// Implement the Pod trait for aya HashMap compatibility
+unsafe impl aya::Pod for Ipv4Key {}
+unsafe impl aya::Pod for Ipv6Key {}
+
+/// Cgroup manager that creates and manages a cgroup for process isolation
+pub struct CgroupManager {
+    cgroup_path: PathBuf,
+    cgroup_file: File,
+}
+
+impl CgroupManager {
+    /// Create a new cgroup and return a manager for it
+    pub fn create() -> Result<Self, MoriError> {
+        // Create a unique cgroup directory under /sys/fs/cgroup/
+        let cgroup_name = format!("mori-{}", process::id());
+        let cgroup_path = PathBuf::from("/sys/fs/cgroup").join(cgroup_name);
+
+        fs::create_dir_all(&cgroup_path)?;
+        let cgroup_file = File::open(&cgroup_path)?;
+
+        Ok(Self {
+            cgroup_path,
+            cgroup_file,
+        })
+    }
+
+    /// Get a borrowed file descriptor for the cgroup
+    pub fn fd(&self) -> BorrowedFd<'_> {
+        unsafe { BorrowedFd::borrow_raw(self.cgroup_file.as_raw_fd()) }
+    }
+
+    /// Add a process to this cgroup
+    pub fn add_process(&self, pid: u32) -> Result<(), MoriError> {
+        let procs_path = self.cgroup_path.join("cgroup.procs");
+        let mut file = OpenOptions::new().write(true).open(procs_path)?;
+        write!(file, "{}", pid)?;
+        Ok(())
+    }
+}
+
+impl Drop for CgroupManager {
+    fn drop(&mut self) {
+        // Clean up the cgroup directory when dropped
+        let _ = fs::remove_dir(&self.cgroup_path);
+    }
+}
+
 /// Holds the loaded eBPF object. Dropping this struct detaches the programs automatically.
-#[allow(dead_code)]
 pub struct NetworkEbpf {
     bpf: Ebpf,
 }
@@ -51,4 +120,61 @@ impl NetworkEbpf {
 
         Ok(Self { bpf })
     }
+
+    /// Add an IPv4 address to the allow list
+    pub fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+        let mut map: HashMap<_, Ipv4Key, u8> =
+            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
+        let key = Ipv4Key {
+            addr: addr.to_bits().to_be(),
+        };
+        map.insert(key, 1, 0)
+            .map_err(|e| MoriError::Io(io::Error::other(format!("{}", e))))?;
+        Ok(())
+    }
+
+    /// Initialize eBPF logger for receiving logs from eBPF programs
+    pub fn init_logger(&mut self) -> Result<(), MoriError> {
+        // Skip logger initialization for now
+        Ok(())
+    }
+}
+
+/// Execute a command in a controlled cgroup with network restrictions
+pub fn execute_with_network_control(
+    command: &str,
+    args: &[&str],
+    allowed_ips: &[Ipv4Addr],
+) -> Result<i32, MoriError> {
+    // Create and setup cgroup
+    let cgroup = CgroupManager::create()?;
+
+    // Load and attach eBPF programs
+    let mut ebpf = NetworkEbpf::load_and_attach(cgroup.fd())?;
+
+    // Initialize logging
+    ebpf.init_logger()?;
+
+    // Add allowed IP addresses to the map
+    for &ip in allowed_ips {
+        ebpf.allow_ipv4(ip)?;
+        println!("Added {} to allow list", ip);
+    }
+
+    // Spawn the command as a child process
+    let mut child = Command::new(command)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+
+    // Add the child process to our cgroup
+    cgroup.add_process(child.id())?;
+    println!("Process {} added to cgroup", child.id());
+
+    // Wait for the child to complete
+    let status = child.wait()?;
+
+    Ok(status.code().unwrap_or(-1))
 }
