@@ -29,9 +29,10 @@
   ```bash
   sudo apt update
   sudo apt install -y build-essential pkg-config cmake
-  sudo apt install -y clang llvm lld bpftool libbpf-dev linux-headers-$(uname -r)
+  sudo apt install -y clang llvm lld bpftool libbpf-dev
   sudo apt install -y linux-libc-dev libclang-dev
   sudo apt install -y curl git
+  cargo install bpf-linker
   curl https://sh.rustup.rs -sSf | sh
   source $HOME/.cargo/env
   ```

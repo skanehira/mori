@@ -1,12 +1,6 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
-fn main() {
-    if let Err(err) = try_build() {
-        panic!("{err}");
-    }
-}
-
-fn try_build() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "linux" {
         // Skip eBPF compilation when building for non-Linux targets (e.g., macOS host).

@@ -9,10 +9,9 @@ use std::{
 };
 
 use aya::{
-    include_bytes_aligned,
+    Ebpf, include_bytes_aligned,
     maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
-    Ebpf,
 };
 
 use crate::error::MoriError;
@@ -20,13 +19,7 @@ use crate::error::MoriError;
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4", "mori_connect6"];
 
-// Key structures that match the eBPF program definitions
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Ipv4Key {
-    pub addr: u32, // IPv4 address in network byte order
-}
-
+// Key structure for IPv6 (IPv4 uses u32 directly)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Ipv6Key {
@@ -34,7 +27,6 @@ pub struct Ipv6Key {
 }
 
 // Implement the Pod trait for aya HashMap compatibility
-unsafe impl aya::Pod for Ipv4Key {}
 unsafe impl aya::Pod for Ipv6Key {}
 
 /// Cgroup manager that creates and manages a cgroup for process isolation
@@ -123,12 +115,10 @@ impl NetworkEbpf {
 
     /// Add an IPv4 address to the allow list
     pub fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
-        let mut map: HashMap<_, Ipv4Key, u8> =
+        let mut map: HashMap<_, u32, u8> =
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
-        let key = Ipv4Key {
-            addr: addr.to_bits().to_be(),
-        };
-        map.insert(key, 1, 0)
+        let key = addr.to_bits().to_be();
+        map.insert(key, 1, 0) // 1 = allowed, flags = 0 (BPF_ANY)
             .map_err(|e| MoriError::Io(io::Error::other(format!("{}", e))))?;
         Ok(())
     }

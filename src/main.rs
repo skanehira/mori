@@ -1,8 +1,7 @@
 use clap::Parser;
 use std::net::Ipv4Addr;
 
-#[cfg(target_os = "linux")]
-use mori::runtime::linux::execute_with_network_control;
+use mori::runtime::execute_with_network_control;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Network sandbox for Linux using eBPF")]

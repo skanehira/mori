@@ -7,14 +7,9 @@ use aya_ebpf::{
     programs::SockAddrContext,
 };
 
-// Key structure for IPv4 addresses
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Ipv4Key {
-    pub addr: u32, // IPv4 address in network byte order
-}
+const ALLOW: i32 = 1;
+const DENY: i32 = 0;
 
-// Key structure for IPv6 addresses
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Ipv6Key {
@@ -22,8 +17,9 @@ pub struct Ipv6Key {
 }
 
 // Allow lists for IPv4 and IPv6 addresses
+// Using u8 as value since we only care about key existence (1 = allowed)
 #[map]
-static ALLOW_V4: HashMap<Ipv4Key, u8> = HashMap::with_max_entries(1024, 0);
+static ALLOW_V4: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
 
 #[map]
 static ALLOW_V6: HashMap<Ipv6Key, u8> = HashMap::with_max_entries(1024, 0);
@@ -44,18 +40,37 @@ pub fn mori_connect6(ctx: SockAddrContext) -> i32 {
     }
 }
 
-const ALLOW: i32 = 1;
-#[allow(dead_code)]
-const DENY: i32 = 0;
-
 enum Protocol {
     Ipv4,
     Ipv6,
 }
 
-fn try_handle_connect(_ctx: &SockAddrContext, _proto: Protocol) -> Result<i32, ()> {
-    // For now, allow all connections to test basic functionality
-    Ok(ALLOW)
+fn try_handle_connect(ctx: &SockAddrContext, proto: Protocol) -> Result<i32, ()> {
+    match proto {
+        Protocol::Ipv4 => {
+            let addr = unsafe { (*ctx.sock_addr).user_ip4 };
+            match unsafe { ALLOW_V4.get(&addr) } {
+                Some(_) => Ok(ALLOW),
+                None => Ok(DENY),
+            }
+        }
+        Protocol::Ipv6 => {
+            let addr = unsafe {
+                [
+                    (*ctx.sock_addr).user_ip6[0],
+                    (*ctx.sock_addr).user_ip6[1],
+                    (*ctx.sock_addr).user_ip6[2],
+                    (*ctx.sock_addr).user_ip6[3],
+                ]
+            };
+
+            let key = Ipv6Key { addr };
+            match unsafe { ALLOW_V6.get(&key) } {
+                Some(_) => Ok(ALLOW),
+                None => Ok(DENY),
+            }
+        }
+    }
 }
 
 #[panic_handler]
