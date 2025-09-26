@@ -41,6 +41,7 @@
   - Rust ツールチェーンは `rustup` で管理し、プロジェクトに合わせて nightly / stable を切り替える。
   - OrbStack 提供カーネルなど独自ビルドの場合、`linux-headers-$(uname -r)` が配布されていないケースがある点に留意する。
   - カーネルヘッダーが取得できない場合は、ホスト側の `/usr/src/linux-headers-*` をマウントする、もしくはカーネルソースから必要分のみ取得するといった代替策を検討する。
+  - eBPF のビルドには nightly toolchain + `rust-src` コンポーネント、および `cargo install bpf-linker` で導入できる `bpf-linker` を使用する。
 
 ### スモークテスト記録
 - macOS (2025-09-25): `cargo test` / `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` 成功。
@@ -72,7 +73,7 @@
 
 ## フェーズ1: Linux 向けネットワーク制御
 ### TODO
-- [ ] connect4 / connect6 にフックする eBPF プログラムを作成し cgroup にアタッチする
+- [x] connect4 / connect6 にフックする eBPF プログラムを作成し cgroup にアタッチする
 - [ ] Hickory DNS による FQDN→IP 解決と eBPF マップ更新ループ（TTL 尊重）を実装する
 - [ ] mori CLI / 設定ポリシーから Linux ネットワーク許可ルール（FQDN / IP / CIDR）への変換レイヤーを実装する
 - [ ] 拒否イベントのログ出力と最低限の観測手段（構造化ログ等）を整備する

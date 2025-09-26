@@ -1,7 +1,10 @@
+pub mod error;
+pub mod runtime;
+
 #[cfg(test)]
 mod tests {
     #[test]
-    fn it_works() {
+    fn sanity() {
         assert_eq!(2 + 2, 4);
     }
 }

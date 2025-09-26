@@ -27,7 +27,12 @@ mori
 │   │   ├── net.rs         // DNS 解決やルール変換の共通処理
 │   │   └── logging.rs     // ログ出力やエラーフォーマット
 │   ├── bin
-│   │   └── mori.rs       // CLI 実行エントリ。ライブラリAPIを呼び出す薄いラッパー
+│   │   └── mori.rs        // CLI 実行エントリ。ライブラリAPIを呼び出す薄いラッパー
+├── mori-bpf
+│   ├── Cargo.toml         // eBPF 専用サブクレート（bpfel-unknown-none ターゲット）
+│   └── src/main.rs        // connect4/connect6 フックなど eBPF プログラム本体
+├── build.rs               // Linux ビルド時に mori-bpf をコンパイルし ELF を埋め込む
+└── Cargo.toml             // ワークスペース定義 + Linux 限定依存
 ```
 
 - `cli::args` で clap によるフラグ定義 (`--allow-network`, `--config` など)。
@@ -36,6 +41,7 @@ mori
 - `policy::model` で `Policy` の土台を定義し、`policy::file` / `policy::net` / `policy::process` がそれぞれ固有の検証メソッドを実装。`policy::mod` から一括で呼び出し最終ポリシーを確定。
 - OS 依存の処理は `runtime` モジュール、OS 非依存の共通処理は `share::*` へ配置し、`runtime` から再利用する。
 - `bin/mori.rs` は最小限の CLI エントリポイントとして `Args::parse()` → ライブラリ公開 API を呼び出し、他ツールからは `lib.rs` 経由で mori を再利用できる構成にする。
+- eBPF コードは `mori-bpf` サブクレートとして分離し、`build.rs` で `aya_build::build_ebpf` を用いて ELF を生成。生成物は `include_bytes_aligned!` でホスト側ランタイムに埋め込む。
 
 ## エントリポイントのフロー
 `bin/mori.rs` は `Args::parse()` 等を呼び出した上で、ライブラリ側のエントリ関数へ処理を委譲する。以下はライブラリ側で実行される主なステップ。

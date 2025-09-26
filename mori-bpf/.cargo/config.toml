@@ -1,0 +1,6 @@
+[build]
+target = "bpfel-unknown-none"
+
+[target.bpfel-unknown-none]
+linker = "clang"
+rustflags = ["-C", "target-feature=+alu32"]

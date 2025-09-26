@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    "mori-bpf",
+]
+resolver = "2"
+
 [package]
 name = "mori"
 version = "0.0.1"
@@ -6,3 +12,10 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.48", features = ["derive"] }
+thiserror = "2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = "0.13.1"
+
+[build-dependencies]
+aya-build = "0.1.2"
