@@ -55,13 +55,12 @@
   xcode-select --install              # Xcode Command Line Tools を導入
   /usr/sbin/softwareupdate --install-rosetta --agree-to-license  # Apple Silicon で必要なら
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  brew install rustup-init llvm bpftrace
+  brew install rustup-init
   rustup-init
   source $HOME/.cargo/env
   ```
 - 注意点:
   - `sandbox-exec` は将来的に削除される可能性があるため、挙動と代替策（Apple の App Sandbox など）を継続的に監視する。
-  - Homebrew の `llvm` を PATH に入れることで macOS 側でも eBPF ソースの静的検査や解析を行える。
   - macOS 固有テストでは codesign / notarization の要件も調査する（今後の公開に備えて）。
 - スモークテスト実績:
   - `cargo test`（2025-09-25）を macOS ホストで実行し成功。
