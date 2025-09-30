@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     convert::TryInto,
     fs::{self, File, OpenOptions},
     io::Write,
@@ -6,6 +7,9 @@ use std::{
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
     process::{self, Command, Stdio},
+    sync::{Arc, Condvar, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
 
 use aya::{
@@ -16,8 +20,11 @@ use aya::{
 
 use crate::{
     error::MoriError,
-    net::{parse_allow_network, resolve_domains},
+    net::{cache::DnsCache, parse_allow_network, resolve_domains, resolver::DomainRecords},
 };
+
+const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
@@ -115,6 +122,14 @@ impl NetworkEbpf {
             .map_err(MoriError::Map)?;
         Ok(())
     }
+
+    pub fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+        let mut map: HashMap<_, u32, u8> =
+            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
+        let key = addr.to_bits().to_be();
+        map.remove(&key).map_err(MoriError::Map)?;
+        Ok(())
+    }
 }
 
 /// Execute a command in a controlled cgroup with network restrictions
@@ -124,29 +139,30 @@ pub fn execute_with_network_control(
     allow_network_rules: &[String],
 ) -> Result<i32, MoriError> {
     let valid_network_rules = parse_allow_network(allow_network_rules)?;
-    let resolved = resolve_domains(&valid_network_rules.domains)?;
+    let domain_names = valid_network_rules.domains.clone();
+    let resolved = resolve_domains(&domain_names)?;
 
     // Create and setup cgroup
     let cgroup = CgroupManager::create()?;
 
     // Load and attach eBPF programs
-    let mut ebpf = NetworkEbpf::load_and_attach(cgroup.fd())?;
+    let ebpf = Arc::new(Mutex::new(NetworkEbpf::load_and_attach(cgroup.fd())?));
+
+    let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
+    let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
+    let now = Instant::now();
 
     // Add allowed IP addresses to the map
-    for &ip in &valid_network_rules.direct_v4 {
-        ebpf.allow_ipv4(ip)?;
-        println!("Added {} to allow list", ip);
+    {
+        let mut ebpf_guard = ebpf.lock().unwrap();
+        for &ip in &valid_network_rules.direct_v4 {
+            ebpf_guard.allow_ipv4(ip)?;
+            println!("Added {} to allow list", ip);
+        }
     }
 
-    for &ip in &resolved.domain_v4 {
-        ebpf.allow_ipv4(ip)?;
-        println!("Resolved domain IPv4 {} added to allow list", ip);
-    }
-
-    for &ip in &resolved.dns_v4 {
-        ebpf.allow_ipv4(ip)?;
-        println!("Nameserver IPv4 {} added to allow list", ip);
-    }
+    apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)?;
+    apply_dns_servers(&ebpf, &allowed_dns_ips, resolved.dns_v4)?;
 
     // Spawn the command as a child process
     let mut child = Command::new(command)
@@ -160,8 +176,119 @@ pub fn execute_with_network_control(
     cgroup.add_process(child.id())?;
     println!("Process {} added to cgroup", child.id());
 
-    // Wait for the child to complete
+    if domain_names.is_empty() {
+        let status = child.wait()?;
+        return Ok(status.code().unwrap_or(-1));
+    }
+
+    let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+    let refresh_handle = spawn_refresh_thread(
+        domain_names.clone(),
+        Arc::clone(&dns_cache),
+        Arc::clone(&ebpf),
+        Arc::clone(&allowed_dns_ips),
+        Arc::clone(&condvar_pair),
+    );
+
     let status = child.wait()?;
+    condvar_pair.1.notify_all();
+    if let Some(handle) = refresh_handle {
+        handle
+            .join()
+            .map_err(|_| std::io::Error::other("refresh thread panicked"))
+            .map_err(MoriError::Io)??;
+    }
 
     Ok(status.code().unwrap_or(-1))
+}
+
+fn apply_domain_records(
+    dns_cache: &Arc<Mutex<DnsCache>>,
+    ebpf: &Arc<Mutex<NetworkEbpf>>,
+    now: Instant,
+    domains: Vec<DomainRecords>,
+) -> Result<(), MoriError> {
+    let diffs = {
+        let mut cache = dns_cache.lock().unwrap();
+        domains
+            .into_iter()
+            .map(|domain| cache.apply(&domain.domain, now, domain.records))
+            .collect::<Vec<_>>()
+    };
+
+    let mut ebpf_guard = ebpf.lock().unwrap();
+    for diff in diffs {
+        for ip in diff.removed {
+            ebpf_guard.remove_ipv4(ip)?;
+            println!("Resolved domain IPv4 {} removed from allow list", ip);
+        }
+        for ip in diff.added {
+            ebpf_guard.allow_ipv4(ip)?;
+            println!("Resolved domain IPv4 {} added to allow list", ip);
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_dns_servers(
+    ebpf: &Arc<Mutex<NetworkEbpf>>,
+    allowed_dns_ips: &Arc<Mutex<HashSet<Ipv4Addr>>>,
+    ips: Vec<Ipv4Addr>,
+) -> Result<(), MoriError> {
+    let mut set = allowed_dns_ips.lock().unwrap();
+    let mut ebpf_guard = ebpf.lock().unwrap();
+
+    for ip in ips {
+        if set.insert(ip) {
+            ebpf_guard.allow_ipv4(ip)?;
+            println!("Nameserver IPv4 {} added to allow list", ip);
+        }
+    }
+
+    Ok(())
+}
+
+fn spawn_refresh_thread(
+    domains: Vec<String>,
+    dns_cache: Arc<Mutex<DnsCache>>,
+    ebpf: Arc<Mutex<NetworkEbpf>>,
+    allowed_dns_ips: Arc<Mutex<HashSet<Ipv4Addr>>>,
+    condvar_pair: Arc<(Mutex<()>, Condvar)>,
+) -> Option<thread::JoinHandle<Result<(), MoriError>>> {
+    if domains.is_empty() {
+        return None;
+    }
+
+    Some(thread::spawn(move || -> Result<(), MoriError> {
+        let (lock, condvar) = &*condvar_pair;
+        loop {
+            let now = Instant::now();
+            let sleep_duration = {
+                let cache = dns_cache.lock().unwrap();
+                cache
+                    .next_refresh_in(now)
+                    .unwrap_or(DEFAULT_REFRESH_INTERVAL)
+                    .max(MIN_REFRESH_INTERVAL)
+            };
+
+            let guard = lock.lock().unwrap();
+            let result = condvar.wait_timeout(guard, sleep_duration).unwrap();
+
+            if !result.1.timed_out() {
+                return Ok(());
+            }
+
+            match resolve_domains(&domains) {
+                Ok(resolved) => {
+                    let now = Instant::now();
+                    apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)?;
+                    apply_dns_servers(&ebpf, &allowed_dns_ips, resolved.dns_v4)?;
+                }
+                Err(err) => {
+                    eprintln!("Failed to refresh DNS records: {err}");
+                }
+            }
+        }
+    }))
 }

@@ -5,12 +5,19 @@ use std::{
 
 use hickory_resolver::{Resolver, config::ResolverConfig, system_conf};
 
+use super::cache::Entry;
 use crate::error::MoriError;
 
 #[derive(Default, Debug, PartialEq)]
+pub struct DomainRecords {
+    pub domain: String,
+    pub records: Vec<Entry>,
+}
+
+#[derive(Default, Debug, PartialEq)]
 pub struct ResolvedAddresses {
-    /// IPv4 addresses resolved from domain names
-    pub domain_v4: Vec<Ipv4Addr>,
+    /// Resolved IPv4 addresses per domain with TTL information
+    pub domains: Vec<DomainRecords>,
     /// IPv4 addresses of DNS servers used for resolution
     pub dns_v4: Vec<Ipv4Addr>,
 }
@@ -47,7 +54,7 @@ pub fn resolve_domains(domains: &[String]) -> Result<ResolvedAddresses, MoriErro
 
     let nameservers = collect_nameserver_ips(&config);
 
-    let mut v4_set: HashSet<Ipv4Addr> = HashSet::new();
+    let mut domain_records = Vec::with_capacity(domains.len());
 
     for domain in domains {
         let response =
@@ -58,15 +65,28 @@ pub fn resolve_domains(domains: &[String]) -> Result<ResolvedAddresses, MoriErro
                     source,
                 })?;
 
+        let valid_until = response.valid_until();
+        let mut records = Vec::new();
+
         for ip in response.iter() {
             if let IpAddr::V4(v4) = ip {
-                v4_set.insert(v4);
+                records.push(Entry {
+                    ip: v4,
+                    expires_at: valid_until,
+                });
             }
+        }
+
+        if !records.is_empty() {
+            domain_records.push(DomainRecords {
+                domain: domain.clone(),
+                records,
+            });
         }
     }
 
     Ok(ResolvedAddresses {
-        domain_v4: v4_set.into_iter().collect(),
+        domains: domain_records,
         dns_v4: nameservers,
     })
 }
@@ -90,14 +110,20 @@ fn collect_nameserver_ips(config: &ResolverConfig) -> Vec<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn test_resolve_domain_success() {
         let domains = vec!["localhost".to_string()];
         let resolved = resolve_domains(&domains).unwrap();
-        assert_eq!(
-            resolved.domain_v4,
-            vec!["127.0.0.1".parse::<Ipv4Addr>().unwrap()]
-        );
+        let record = resolved
+            .domains
+            .iter()
+            .find(|entry| entry.domain == "localhost")
+            .expect("localhost record present");
+        assert_eq!(record.records.len(), 1);
+        let entry = &record.records[0];
+        assert_eq!(entry.ip, "127.0.0.1".parse::<Ipv4Addr>().unwrap());
+        assert!(entry.expires_at > Instant::now());
     }
 }
