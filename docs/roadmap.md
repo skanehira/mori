@@ -73,7 +73,8 @@
 
 ## フェーズ1: Linux 向けネットワーク制御
 ### TODO
-- [x] connect4 / connect6 にフックする eBPF プログラムを作成し cgroup にアタッチする
+- [x] connect4 にフックする eBPF プログラムを作成し cgroup にアタッチする
+- [ ] connect6 にフックする eBPF プログラムを作成し cgroup にアタッチする（IPv6 対応は将来検討）
 - [ ] Hickory DNS による FQDN→IP 解決と eBPF マップ更新ループ（TTL 尊重）を実装する
 - [ ] mori CLI / 設定ポリシーから Linux ネットワーク許可ルール（FQDN / IP / CIDR）への変換レイヤーを実装する
 - [ ] 拒否イベントのログ出力と最低限の観測手段（構造化ログ等）を整備する
