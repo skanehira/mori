@@ -2,6 +2,7 @@ use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 use aya::{EbpfError, maps::MapError, programs::ProgramError};
+use hickory_resolver::error::ResolveError;
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Error)]
@@ -26,11 +27,27 @@ pub enum MoriError {
         source: ProgramError,
     },
 
+    #[error("failed to initialize DNS resolver: {source}")]
+    DnsResolverInit {
+        #[source]
+        source: ResolveError,
+    },
+
+    #[error("failed to resolve domain {domain}: {source}")]
+    DnsLookup {
+        domain: String,
+        #[source]
+        source: ResolveError,
+    },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("eBPF map error: {0}")]
     Map(#[from] MapError),
+
+    #[error("invalid --allow-network entry '{entry}': {reason}")]
+    InvalidAllowNetworkEntry { entry: String, reason: String },
 }
 
 #[cfg(not(target_os = "linux"))]

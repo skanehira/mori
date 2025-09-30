@@ -1,4 +1,5 @@
 pub mod error;
+pub mod net;
 pub mod runtime;
 
 #[cfg(test)]

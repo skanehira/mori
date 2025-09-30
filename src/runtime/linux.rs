@@ -1,7 +1,7 @@
 use std::{
     convert::TryInto,
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::Write,
     net::Ipv4Addr,
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
@@ -9,28 +9,22 @@ use std::{
 };
 
 use aya::{
-    Ebpf, include_bytes_aligned,
+    include_bytes_aligned,
     maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
+    Ebpf,
 };
 
-use crate::error::MoriError;
+use crate::{
+    error::MoriError,
+    net::{parse_allow_network, resolve_domains},
+};
 
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
-const PROGRAM_NAMES: &[&str] = &["mori_connect4", "mori_connect6"];
-
-// Key structure for IPv6 (IPv4 uses u32 directly)
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Ipv6Key {
-    pub addr: [u32; 4], // IPv6 address in network byte order
-}
-
-// Implement the Pod trait for aya HashMap compatibility
-unsafe impl aya::Pod for Ipv6Key {}
+const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
 
 /// Cgroup manager that creates and manages a cgroup for process isolation
-pub struct CgroupManager {
+struct CgroupManager {
     cgroup_path: PathBuf,
     cgroup_file: File,
 }
@@ -73,12 +67,12 @@ impl Drop for CgroupManager {
 }
 
 /// Holds the loaded eBPF object. Dropping this struct detaches the programs automatically.
-pub struct NetworkEbpf {
+struct NetworkEbpf {
     bpf: Ebpf,
 }
 
 impl NetworkEbpf {
-    /// Load the mori eBPF program and attach connect4/connect6 hooks to the provided cgroup fd.
+    /// Load the mori eBPF program and attach the connect4 hook to the provided cgroup fd.
     pub fn load_and_attach(cgroup_fd: BorrowedFd<'_>) -> Result<Self, MoriError> {
         let mut bpf = Ebpf::load(EBPF_ELF)?;
 
@@ -86,26 +80,26 @@ impl NetworkEbpf {
             let program = bpf
                 .program_mut(name)
                 .ok_or_else(|| MoriError::ProgramNotFound {
-                    name: (*name).to_string(),
+                    name: name.to_string(),
                 })?;
 
             let program: &mut CgroupSockAddr =
                 program
                     .try_into()
                     .map_err(|source| MoriError::ProgramPrepare {
-                        name: (*name).to_string(),
+                        name: name.to_string(),
                         source,
                     })?;
 
             program.load().map_err(|source| MoriError::ProgramPrepare {
-                name: (*name).to_string(),
+                name: name.to_string(),
                 source,
             })?;
 
             program
                 .attach(cgroup_fd, CgroupAttachMode::Single)
                 .map_err(|source| MoriError::ProgramAttach {
-                    name: (*name).to_string(),
+                    name: name.to_string(),
                     source,
                 })?;
         }
@@ -119,13 +113,7 @@ impl NetworkEbpf {
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
         let key = addr.to_bits().to_be();
         map.insert(key, 1, 0) // 1 = allowed, flags = 0 (BPF_ANY)
-            .map_err(|e| MoriError::Io(io::Error::other(format!("{}", e))))?;
-        Ok(())
-    }
-
-    /// Initialize eBPF logger for receiving logs from eBPF programs
-    pub fn init_logger(&mut self) -> Result<(), MoriError> {
-        // Skip logger initialization for now
+            .map_err(MoriError::Map)?;
         Ok(())
     }
 }
@@ -134,21 +122,31 @@ impl NetworkEbpf {
 pub fn execute_with_network_control(
     command: &str,
     args: &[&str],
-    allowed_ips: &[Ipv4Addr],
+    allow_network_rules: &[String],
 ) -> Result<i32, MoriError> {
+    let valid_network_rules = parse_allow_network(allow_network_rules)?;
+    let resolved = resolve_domains(&valid_network_rules.domains)?;
+
     // Create and setup cgroup
     let cgroup = CgroupManager::create()?;
 
     // Load and attach eBPF programs
     let mut ebpf = NetworkEbpf::load_and_attach(cgroup.fd())?;
 
-    // Initialize logging
-    ebpf.init_logger()?;
-
     // Add allowed IP addresses to the map
-    for &ip in allowed_ips {
+    for &ip in &valid_network_rules.direct_v4 {
         ebpf.allow_ipv4(ip)?;
         println!("Added {} to allow list", ip);
+    }
+
+    for &ip in &resolved.domain_v4 {
+        ebpf.allow_ipv4(ip)?;
+        println!("Resolved domain IPv4 {} added to allow list", ip);
+    }
+
+    for &ip in &resolved.dns_v4 {
+        ebpf.allow_ipv4(ip)?;
+        println!("Nameserver IPv4 {} added to allow list", ip);
     }
 
     // Spawn the command as a child process
