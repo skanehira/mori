@@ -9,10 +9,9 @@ use std::{
 };
 
 use aya::{
-    include_bytes_aligned,
+    Ebpf, include_bytes_aligned,
     maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
-    Ebpf,
 };
 
 use crate::{
