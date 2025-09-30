@@ -50,9 +50,28 @@ pub enum MoriError {
     InvalidAllowNetworkEntry { entry: String, reason: String },
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 #[derive(Debug, Error)]
 pub enum MoriError {
     #[error("operation not supported on this platform")]
     Unsupported,
+
+    #[error("failed to initialize DNS resolver: {source}")]
+    DnsResolverInit {
+        #[source]
+        source: ResolveError,
+    },
+
+    #[error("failed to resolve domain {domain}: {source}")]
+    DnsLookup {
+        domain: String,
+        #[source]
+        source: ResolveError,
+    },
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("invalid --allow-network entry '{entry}': {reason}")]
+    InvalidAllowNetworkEntry { entry: String, reason: String },
 }
