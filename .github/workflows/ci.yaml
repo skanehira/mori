@@ -40,6 +40,10 @@ jobs:
           components: rustfmt, clippy
           cache-shared-key: setup-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install nightly toolchain (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup toolchain install nightly-x86_64-unknown-linux-gnu --profile minimal --component rust-src
+
       - name: Install reviewdog
         uses: reviewdog/action-setup@v1
 
@@ -75,6 +79,10 @@ jobs:
         with:
           components: llvm-tools-preview
           cache-shared-key: setup-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install nightly toolchain (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup toolchain install nightly-x86_64-unknown-linux-gnu --profile minimal --component rust-src
 
       - name: Install tools
         uses: taiki-e/install-action@v2
