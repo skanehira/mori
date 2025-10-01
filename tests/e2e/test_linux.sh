@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 cargo build --release
 
-BIN="./target/release/mori"
+BIN="sudo ./target/release/mori"
 
 # Test 1: Network is blocked without --allow-network
 output=$($BIN -- curl --max-time 2 -I https://example.com 2>&1 || true)
