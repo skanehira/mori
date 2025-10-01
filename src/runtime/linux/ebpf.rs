@@ -16,19 +16,19 @@ const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
 
 /// eBPF controller abstraction for testing
 #[cfg_attr(test, automock)]
-pub(super) trait EbpfController: Send + Sync + 'static {
+pub trait EbpfController: Send + Sync + 'static {
     fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
     fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
 }
 
 /// Holds the loaded eBPF object. Dropping this struct detaches the programs automatically.
-pub(super) struct NetworkEbpf {
+pub struct NetworkEbpf {
     bpf: Ebpf,
 }
 
 impl NetworkEbpf {
     /// Load the mori eBPF program and attach the connect4 hook to the provided cgroup fd.
-    pub(super) fn load_and_attach(cgroup_fd: BorrowedFd<'_>) -> Result<Self, MoriError> {
+    pub fn load_and_attach(cgroup_fd: BorrowedFd<'_>) -> Result<Self, MoriError> {
         let mut bpf = Ebpf::load(EBPF_ELF)?;
 
         for name in PROGRAM_NAMES {
@@ -63,7 +63,7 @@ impl NetworkEbpf {
     }
 
     /// Add an IPv4 address to the allow list
-    pub(super) fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+    pub fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
         let mut map: HashMap<_, u32, u8> =
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
         let key = addr.to_bits().to_be();
@@ -72,7 +72,7 @@ impl NetworkEbpf {
         Ok(())
     }
 
-    pub(super) fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+    pub fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
         let mut map: HashMap<_, u32, u8> =
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
         let key = addr.to_bits().to_be();

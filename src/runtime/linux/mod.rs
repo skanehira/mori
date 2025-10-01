@@ -1,6 +1,6 @@
 mod cgroup;
+mod dns;
 mod ebpf;
-mod refresh;
 mod sync;
 
 use std::{
@@ -20,8 +20,8 @@ use crate::{
 };
 
 use cgroup::CgroupManager;
+use dns::{apply_dns_servers, apply_domain_records, spawn_refresh};
 use ebpf::NetworkEbpf;
-use refresh::{apply_dns_servers, apply_domain_records, spawn_refresh_thread};
 use sync::ShutdownSignal;
 
 /// Execute a command in a controlled cgroup with network restrictions
@@ -75,7 +75,7 @@ pub async fn execute_with_network_control(
 
     let shutdown_signal = ShutdownSignal::new();
     let resolver = SystemDnsResolver;
-    let refresh_handle = spawn_refresh_thread(
+    let refresh_handle = spawn_refresh(
         domain_names.clone(),
         Arc::clone(&dns_cache),
         Arc::clone(&ebpf),

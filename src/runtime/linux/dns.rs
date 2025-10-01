@@ -17,7 +17,7 @@ use super::{ebpf::EbpfController, sync::ShutdownSignal};
 
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
-pub(super) fn apply_domain_records<E: EbpfController>(
+pub fn apply_domain_records<E: EbpfController>(
     dns_cache: &Arc<Mutex<DnsCache>>,
     ebpf: &Arc<Mutex<E>>,
     now: Instant,
@@ -46,7 +46,7 @@ pub(super) fn apply_domain_records<E: EbpfController>(
     Ok(())
 }
 
-pub(super) fn apply_dns_servers<E: EbpfController>(
+pub fn apply_dns_servers<E: EbpfController>(
     ebpf: &Arc<Mutex<E>>,
     allowed_dns_ips: &Arc<Mutex<HashSet<Ipv4Addr>>>,
     ips: Vec<Ipv4Addr>,
@@ -64,7 +64,7 @@ pub(super) fn apply_dns_servers<E: EbpfController>(
     Ok(())
 }
 
-pub(super) fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
+pub fn spawn_refresh<R: DnsResolver, E: EbpfController>(
     domains: Vec<String>,
     dns_cache: Arc<Mutex<DnsCache>>,
     ebpf: Arc<Mutex<E>>,
@@ -130,7 +130,7 @@ mod tests {
         let shutdown_signal = ShutdownSignal::new();
         let resolver = MockDnsResolver::new();
 
-        let result = spawn_refresh_thread(
+        let result = spawn_refresh(
             domains,
             dns_cache,
             ebpf,
@@ -175,7 +175,7 @@ mod tests {
         // DNS resolution should not be called since we shutdown immediately
         mock_resolver.expect_resolve_domains().times(0);
 
-        let handle = spawn_refresh_thread(
+        let handle = spawn_refresh(
             domains,
             dns_cache,
             ebpf,
@@ -236,7 +236,7 @@ mod tests {
             .times(1..)
             .returning(|_| Ok(ResolvedAddresses::default()));
 
-        let handle = spawn_refresh_thread(
+        let handle = spawn_refresh(
             domains,
             dns_cache,
             ebpf,
@@ -289,7 +289,7 @@ mod tests {
             .times(1..)
             .returning(|_| Err(MoriError::Io(std::io::Error::other("DNS failure"))));
 
-        let handle = spawn_refresh_thread(
+        let handle = spawn_refresh(
             domains,
             dns_cache,
             ebpf,

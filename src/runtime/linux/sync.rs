@@ -48,7 +48,7 @@ use tokio::sync::Notify;
 /// signal.shutdown();
 /// # }
 /// ```
-pub(super) struct ShutdownSignal {
+pub struct ShutdownSignal {
     notify: Notify,
     shutdown: AtomicBool,
 }
