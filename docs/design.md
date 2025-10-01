@@ -27,139 +27,213 @@
 ---
 
 ## アーキテクチャ概要
-- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、共通中間表現 `Policy` を構築する（詳細は `docs/cli_architecture.md` 参照）。
-- OS ごとの実装は `Policy` を受け取り、各 OS 用のポリシー（Landlock ルール、eBPF マップ、sandbox-exec プロファイル）へ変換する。
+- CLI レイヤーはフラグ解析・設定ファイル読み込みを行い、`NetworkPolicy` 構造体を構築する。
+- Linux 実装が `NetworkPolicy` を受け取り、eBPF マップへ変換してネットワーク制御を行う。
 
-### Linux 側 (eBPF + Hickory)
+### 実装済み: Linux 側 (eBPF + tokio + Hickory)
 ```
-+-----------------------------+
-| mori (Rust, Aya)           |
-|                             |
-|  +-----------------------+  |
-|  | eBPF プログラム       |  |
-|  | (aya-bpf)             |  |
-|  |  - connect4 hook      |  |
-|  |  - connect6 hook      |  |
-|  |  - ALLOW_V4/V6 map    |  |
-|  +-----------------------+  |
-|                             |
-|  +-----------------------+  |
-|  | ユーザー空間          |  |
-|  | (Aya + Hickory)       |  |
-|  |  - DNS解決 (FQDN→IP)  |  |
-|  |  - マップ更新         |  |
-|  |  - 子プロセス実行     |  |
-|  +-----------------------+  |
-+-----------------------------+
++--------------------------------------------+
+| mori (Rust, Aya, tokio)                   |
+|                                            |
+|  +--------------------------------------+  |
+|  | eBPF プログラム (aya-bpf)            |  |
+|  |  - connect4 hook (IPv4)              |  |
+|  |  - ALLOW_V4 HashMap                  |  |
+|  +--------------------------------------+  |
+|                                            |
+|  +--------------------------------------+  |
+|  | ユーザー空間 (tokio async)           |  |
+|  |  - CLI フラグ / 設定ファイル解析     |  |
+|  |  - NetworkPolicy 構築                |  |
+|  |  - 非同期 DNS 解決 (Hickory)         |  |
+|  |  - TTL ベースの定期更新タスク        |  |
+|  |  - eBPF マップの動的更新             |  |
+|  |  - cgroup への子プロセス配置         |  |
+|  +--------------------------------------+  |
++--------------------------------------------+
 ```
 
-### macOS 側 (sandbox-exec ラッパー)
-- mori の中間表現から sandbox-exec S式を生成し、`sandbox-exec` をラップしてコマンドを実行する。
-- `sbx` の挙動を参考にしつつ、mori 独自ルール（FQDN 指定、暗黙許可など）を適用する。
+### 未実装: macOS 側 / connect6 (IPv6)
+- roadmap.md を参照
 
 ---
 
-## 機能仕様
+## 機能仕様（現在の実装）
 
 ### Linux ネットワーク制御 (eBPF)
+**実装済み:**
 - タイプ: `CgroupSockAddr`
-- attach: `connect4` (IPv4), `connect6` (IPv6)
-- マップ:
-  - `ALLOW_V4: HashMap<V4Key, u8>`
-  - `ALLOW_V6: HashMap<V6Key, u8>`
+- attach: `connect4` (IPv4)
+- マップ: `ALLOW_V4: HashMap<u32, u8>` (IPv4 アドレスをキーとする許可リスト)
 - 判定:
-  - `connect()` の宛先IPとポートをキーに検索
+  - `connect()` の宛先 IP アドレスをキーに検索
   - マップに存在すれば `PROCEED`
   - 存在しなければ `REJECT`
-- mori CLI の `--allow-network*` フラグで指定された FQDN / IP / CIDR を Hickory で解決し、TTL を尊重してマップを更新する。
 
-### Linux ユーザー空間 (Aya + Hickory Resolver)
-- 引数:
-  - allow 系ネットワークフラグ (`--allow-network`, `--allow-network-outbound` 等)
-  - allow 系ファイルフラグ (`--allow-file-read` 等)
-  - 設定ファイルからのポリシー
-  - `cmd...` 実行するコマンド
-- 処理:
-  1. BPF ELF を埋め込み (`include_bytes_aligned!`) でロード
-  2. cgroup v2 サブディレクトリを作成
-  3. `connect4/6` プログラムを attach
-  4. Hickory DNS を用いた非同期タスクで FQDN を再解決し、TTL を尊重した IP + Port を ALLOW マップに挿入
-  5. 子プロセスを spawn し、PID を対象 cgroup に移動
-  6. 子プロセス終了まで待機し、終了コードをそのまま返す
+**未実装 (今後の拡張):**
+- `connect6` (IPv6)
+- ポート番号による制御
+- CIDR 範囲指定
 
-### Linux ファイルIO制御 (Landlock)
-- allow 系フラグ / 設定ファイルで指定されたパスを Landlock の AccessFs へマッピングする。
-- deny 系指定はサポートしない。未対応フラグを受け取った場合はエラー終了。
-- システムライブラリの暗黙許可セットを Landlock ルールに含める。
+### Linux ユーザー空間（実装済み）
+**入力:**
+- CLI フラグ: `--allow-network <target>`（複数指定可能）
+- 設定ファイル: `--config <path>` (TOML 形式)
+- 実行コマンド: `-- <command> [args...]`
 
-### macOS 全体制御 (sandbox-exec)
-- CLI / 設定ファイルで構築した中間表現から sandbox-exec S式を生成。
-- FQDN や CIDR 指定を sandbox-exec の `(remote ...)` ルールへ変換する。
-- 実行時は `sandbox-exec` をラップし、エラーを mori 側で整形して返す。
+**処理フロー:**
+1. NetworkPolicy 構築
+   - CLI フラグと設定ファイルをパース
+   - FQDN と IPv4 アドレスに分類
+   - 重複を排除してマージ
+2. 初期 DNS 解決
+   - Hickory Resolver で FQDN → IPv4 アドレス解決
+   - TTL 情報を DNS キャッシュに保存
+   - DNS サーバー自体の IPv4 アドレスも許可リストに追加
+3. cgroup 作成と eBPF プログラムアタッチ
+   - `/sys/fs/cgroup/mori-{pid}` ディレクトリ作成
+   - BPF ELF を埋め込み (`include_bytes_aligned!`) でロード
+   - `connect4` プログラムを cgroup にアタッチ
+   - 許可 IPv4 アドレスを ALLOW_V4 マップに挿入
+4. 子プロセス起動
+   - `Command::spawn` でコマンド実行
+   - PID を対象 cgroup に移動
+5. 非同期 DNS 更新タスク起動（ドメイン指定時のみ）
+   - tokio::spawn で非同期タスク起動
+   - DNS キャッシュの TTL を監視
+   - 期限切れ前に再解決を実行
+   - IP アドレス変更を検出して eBPF マップを更新
+6. 子プロセス終了待機
+   - 子プロセスが終了したらシャットダウンシグナル送信
+   - DNS 更新タスクを停止
+   - 終了コードを返す
 
-### 共通機能
-- CLI は OS を自動判定し、内部実装を切り替える。
-- `Policy` を OS 別実装へ渡す共通モジュールを提供する。
-- 拒否イベントや内部エラーを構造化ログで出力し、必要に応じて JSON / 人間可読形式を選択できるようにする。
-- 未定義フラグや設定値エラーは即時エラー終了。
+### データ構造
+
+**NetworkPolicy (`src/policy.rs`):**
+```rust
+pub struct NetworkPolicy {
+    pub allowed_ipv4: Vec<Ipv4Addr>,    // 直接指定された IPv4 アドレス
+    pub allowed_domains: Vec<String>,    // ドメイン名
+}
+```
+
+**ConfigFile (`src/config.rs`):**
+```toml
+[network]
+allow = ["example.com", "192.0.2.1"]
+```
+
+**DnsCache (`src/net/cache.rs`):**
+- ドメインごとに IPv4 アドレスと有効期限を管理
+- 次回更新時刻の計算
+- IP アドレス変更の差分検出
+
+### 非同期実装の詳細
+
+**tokio ランタイム:**
+- `#[tokio::main]` でメイン関数を非同期化
+- DNS 解決: `hickory-resolver` の tokio 統合
+- 定期更新: `tokio::spawn` + `tokio::select!` + `tokio::time::sleep`
+
+**ShutdownSignal (`src/runtime/linux/sync.rs`):**
+- `tokio::sync::Notify` + `AtomicBool` による非同期シャットダウン通知
+- タイムアウトとシャットダウンシグナルを `tokio::select!` で競合
+- 通知の取りこぼしを防ぐ設計
+
+**エラーハンドリング:**
+- DNS 解決失敗時: エラーログを出力して継続（非致命的）
+- eBPF マップ更新失敗時: エラーログを出力して継続（非致命的）
+- シャットダウンシグナル受信時: 正常終了
 
 ---
 
-## 配布形態
+## 配布形態（実装済み）
 - **シングルバイナリ**
   - `aya-bpf` でビルドした eBPF ELF を `build.rs` で `OUT_DIR` にコピー
-  - `include_bytes_aligned!(env!("BPF_ELF_PATH"))` で埋め込み
+  - `include_bytes_aligned!(concat!(env!("OUT_DIR"), "/mori"))` で埋め込み
   - 実行時に外部ファイル不要
-- macOS では `sandbox-exec` が利用可能な環境であることを前提とする。
+  - Linux 専用（macOS 対応は未実装）
 
 ---
 
-## 依存ライブラリのバージョン固定と更新ポリシー
-- **Rust クレート**
-  - `Cargo.lock` でバージョン固定。`clap` / `serde` / `serde_yaml` / `aya` / `aya-bpf` といった主要依存はセマンティックバージョニングに従いパッチ更新は随時反映、マイナー以上の更新は兼互換性の確認後に採用する。
-  - eBPF/Landlock 周辺 (`aya` 系) はカーネル互換の影響が大きいため、メジャーアップデートは専用ブランチで検証してからマージする。
-  - `cargo update -p <crate>` で個別更新→`cargo test` と macOS / Linux スモークテストを必須化する。
-- **システムパッケージ**
-  - Ubuntu VM: `clang`, `llvm`, `bpftool`, `libbpf-dev` は OS の LTS リポジトリを利用し、セキュリティアップデートのみ追従。`linux-headers` が入手できない場合はソースヘッダーをマウントするなど代替策を採用。
-  - macOS: Homebrew で `llvm`、`rustup` をインストールし、`rustup` の stable チャンネルを四半期ごとに更新チェック。`sandbox-exec` の非推奨化動向もウォッチする。
-- **更新フロー**
-  1. 更新候補を issue 化し、影響範囲を記載。
-  2. 依存更新を反映後、`cargo test` + 主要スモークテスト（macOS / Ubuntu）を実行。
-  3. 挙動差が出た場合は回帰テストを追加し、`CHANGELOG` に更新理由と影響範囲を残す。
+## 依存ライブラリ（現在の実装）
+**システム要件:**
+- Linux カーネル 5.7+ (cgroup v2 + eBPF `CgroupSockAddr` サポート)
+- Rust 1.87+ (rust-toolchain.toml で固定)
+- ビルドツール: `clang`, `llvm`, `bpf-linker`
 
 ---
 
-## 運用フロー
-1. ユーザーが以下の形式で実行 (Linux 例):
-   ```bash
-   sudo ./mori --allow-file-read='.' --allow-network='example.com:443' -- curl https://example.com
-   ```
-2. `--allow-network` で指定した FQDN / IP / CIDR 以外の outbound TCP connect は `REJECT`
-3. FQDN は TTL に従い再解決され、IP 変動に追随
-4. macOS では同一 CLI から sandbox-exec プロファイルを生成・適用し、同じフラグで制御を提供する
+## 使用例（現在の実装）
+
+### 基本的な使用
+```bash
+# IPv4 アドレスを直接指定
+sudo ./mori --allow-network 192.0.2.1 -- curl http://192.0.2.1
+
+# ドメイン名を指定（DNS 解決 + TTL ベース自動更新）
+sudo ./mori --allow-network example.com -- curl https://example.com
+
+# 複数の許可先を指定
+sudo ./mori --allow-network example.com --allow-network 192.0.2.1 -- curl https://example.com
+```
+
+### 設定ファイルを使用
+```bash
+# config.toml:
+# [network]
+# allow = ["example.com", "192.0.2.1"]
+
+sudo ./mori --config config.toml -- curl https://example.com
+
+# CLI フラグと設定ファイルの併用（両方がマージされる）
+sudo ./mori --config config.toml --allow-network test.example -- curl https://test.example
+```
+
+### 動作
+1. 指定されたドメイン名を DNS 解決
+2. 解決された IPv4 アドレスと直接指定された IPv4 アドレスを eBPF マップに登録
+3. DNS サーバーの IPv4 アドレスも自動的に許可リストに追加
+4. 子プロセス（curl など）を cgroup に配置して起動
+5. 許可リスト以外への接続は EPERM エラーで拒否
+6. ドメイン名が指定されている場合、TTL に基づいて定期的に再解決し eBPF マップを更新
+7. 子プロセス終了後、DNS 更新タスクを停止して終了
 
 ---
 
-## 制約・注意点
-- **権限**: Linux では CAP_BPF、CAP_SYS_ADMIN 相当が必要
-- **cgroup v2 必須**: unified hierarchy が有効であること
-- **FQDN→IP の限界**:
-  - CDN などで IP が頻繁に変わると追随が必要
-  - DNS TTL を尊重する拡張が望ましい
-- **プロセス移動のタイミング**:
-  - 現状は `spawn→PIDをcgroupへ移動`
-  - race を避けるなら fork→cgroup投入→exec が理想
-- **macOS 固有の制約**:
-  - sandbox-exec のプロファイル構文に依存するため、未対応のルールは明確にエラーにする
-  - コード署名や notarization が必要になる場合がある
-- **CLI 設計**:
-  - allow 系のみサポートするため、deny の指定はエラーで終了
-  - CLI / 設定ファイルのパースエラーは即時終了
+## 制約・注意点（現在の実装）
+
+### 権限
+- Linux では root 権限（または CAP_BPF + CAP_NET_ADMIN）が必要
+- cgroup v2 が有効であること (`/sys/fs/cgroup` が unified hierarchy)
+
+### プロトコル
+- **IPv4 のみ対応**: IPv6 は未実装
+- **TCP のみ**: UDP, ICMP などは未対応
+- **ポート制御なし**: 全ポートが許可対象
+
+### DNS 解決
+- **システムリゾルバを使用**: `/etc/resolv.conf` の設定に従う
+- **TTL ベース更新**: TTL が短い（数秒）場合、頻繁に再解決が発生する可能性
+- **DNS 失敗時の挙動**: エラーログを出力するが、既存の IP アドレスは維持される（非致命的エラー）
+
+### プロセス管理
+- **spawn 後に cgroup 移動**: 理想的には fork → cgroup 移動 → exec だが、現状は spawn 後に移動
+- **子プロセスのみ制御**: 孫プロセス以降も cgroup に自動的に含まれる
+
+### その他
+- **CIDR 表記未対応**: `192.168.1.0/24` のような範囲指定は未実装
+- **ポート指定未対応**: `example.com:443` のようなポート限定は未実装
+- **設定ファイル形式**: TOML 固定（YAML は非対応）
 
 ---
 
-## 今後の検討事項
-- 設定ファイルフォーマットの詳細設計（YAML スキーマ、バリデーション）
-- UDP / QUIC など TCP 以外のプロトコル制御
-- 拒否イベントの可視化（レポートコマンド、GUI 連携など）
-- Landlock 非対応カーネルや sandbox-exec 非搭載環境へのフォールバック
+## 今後の拡張（roadmap.md 参照）
+- **IPv6 対応**: `connect6` フックの実装
+- **CIDR 表記**: IP 範囲指定のサポート
+- **ポート制御**: ポート番号による細かい制御
+- **UDP/QUIC**: TCP 以外のプロトコル対応
+- **拒否イベント可視化**: ログ出力、構造化ログ、レポート機能
+- **macOS 対応**: sandbox-exec ラッパーの実装
+- **Landlock 統合**: ファイル IO 制御の追加

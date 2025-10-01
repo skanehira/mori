@@ -141,24 +141,63 @@ Process → Check cgroup membership → Execute cgroup's eBPF program → Allow/
 
 ## Implementation Details
 
-### CgroupManager (src/runtime/linux.rs)
+### CgroupManager (src/runtime/linux/cgroup.rs)
 - Creates and manages `/sys/fs/cgroup/mori-{pid}` directory
 - Moves processes by writing PID to `cgroup.procs`
 - Automatically removes cgroup directory on Drop
 
-### NetworkEbpf (src/runtime/linux.rs)
+### NetworkEbpf (src/runtime/linux/ebpf.rs)
 - Loads eBPF ELF binary and registers with kernel
-- Attaches `mori_connect4`/`mori_connect6` programs to cgroup
-- Adds IP addresses to `ALLOW_V4`/`ALLOW_V6` maps
+- Attaches `mori_connect4` program to cgroup
+- Provides methods to add/remove IPv4 addresses from ALLOW_V4 map
 
 ### eBPF Programs (mori-bpf/src/main.rs)
 - `mori_connect4`: Hook processing for IPv4 connections
-- `mori_connect6`: Hook processing for IPv6 connections
-- Currently allows all connections (test implementation)
+  - Extracts destination IPv4 address from socket context
+  - Looks up address in ALLOW_V4 HashMap
+  - Returns `1` (allow) if found, `0` (deny) otherwise
+- `mori_connect6`: Placeholder for IPv6 (not yet implemented)
 
-## Future Implementation Plans
+### DNS Resolution and Refresh (src/runtime/linux/refresh.rs)
+**Initial Resolution:**
+1. Parse NetworkPolicy to extract domains
+2. Use Hickory Resolver (tokio-based) to resolve domains → IPv4 addresses
+3. Store results in DnsCache with TTL information
+4. Add resolved IPs to eBPF ALLOW_V4 map
+5. Also add DNS server IPs to allow list (for DNS queries to work)
 
-1. **Actual IP Matching Logic**: Move from current test implementation to real allow/deny decisions
-2. **FQDN Support**: Name resolution with Hickory DNS and TTL respect
-3. **Port Control**: Control by port numbers in addition to IP addresses
+**Periodic Refresh (tokio task):**
+1. Spawn async task if domains are specified
+2. Monitor DnsCache for upcoming expirations
+3. Sleep until next refresh needed (based on TTL)
+4. Re-resolve domains before TTL expires
+5. Detect IP changes (added/removed addresses)
+6. Update eBPF map accordingly:
+   - Add new IPs to ALLOW_V4
+   - Remove old IPs from ALLOW_V4
+7. Handle DNS failures gracefully (log and continue)
+8. Terminate on shutdown signal
+
+**Shutdown Coordination (src/runtime/linux/sync.rs):**
+- `ShutdownSignal` uses `tokio::sync::Notify` + `AtomicBool`
+- Refresh task races between:
+  - DNS refresh timeout (`tokio::time::sleep`)
+  - Shutdown notification (`notify.notified()`)
+- Main process sends shutdown signal when child terminates
+- Refresh task exits cleanly via `tokio::task::JoinHandle::await`
+
+## Implementation Status
+
+### ✅ Implemented
+1. **IP Matching Logic**: IPv4 address-based allow/deny decisions
+2. **FQDN Support**: Async DNS resolution with Hickory DNS and TTL-based auto-refresh
+3. **DNS Cache Management**: TTL tracking and automatic re-resolution
+4. **Dynamic eBPF Map Updates**: Real-time updates as DNS records change
+5. **Shutdown Signaling**: Clean termination of DNS refresh tasks using tokio primitives
+
+### 🚧 Future Plans
+1. **IPv6 Support**: `connect6` hook and ALLOW_V6 map
+2. **Port Control**: Port number-based filtering
+3. **CIDR Support**: IP range specification (e.g., `192.168.1.0/24`)
 4. **Logging**: Recording and visualization of denial events
+5. **UDP/QUIC**: Support for non-TCP protocols
