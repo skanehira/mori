@@ -74,7 +74,7 @@ pub async fn execute_with_network_control(
     }
 
     let shutdown_signal = ShutdownSignal::new();
-    let resolver = Arc::new(SystemDnsResolver);
+    let resolver = SystemDnsResolver;
     let refresh_handle = spawn_refresh_thread(
         domain_names.clone(),
         Arc::clone(&dns_cache),

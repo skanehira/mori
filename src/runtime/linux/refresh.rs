@@ -70,7 +70,7 @@ pub(super) fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
     ebpf: Arc<Mutex<E>>,
     allowed_dns_ips: Arc<Mutex<HashSet<Ipv4Addr>>>,
     shutdown_signal: Arc<ShutdownSignal>,
-    resolver: Arc<R>,
+    resolver: R,
 ) -> Option<tokio::task::JoinHandle<Result<(), MoriError>>> {
     if domains.is_empty() {
         return None;
@@ -128,7 +128,7 @@ mod tests {
         let ebpf = Arc::new(Mutex::new(MockEbpfController::new()));
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
         let shutdown_signal = ShutdownSignal::new();
-        let resolver = Arc::new(MockDnsResolver::new());
+        let resolver = MockDnsResolver::new();
 
         let result = spawn_refresh_thread(
             domains,
@@ -174,7 +174,6 @@ mod tests {
         let mut mock_resolver = MockDnsResolver::new();
         // DNS resolution should not be called since we shutdown immediately
         mock_resolver.expect_resolve_domains().times(0);
-        let resolver = Arc::new(mock_resolver);
 
         let handle = spawn_refresh_thread(
             domains,
@@ -182,7 +181,7 @@ mod tests {
             ebpf,
             allowed_dns_ips,
             Arc::clone(&shutdown_signal),
-            resolver,
+            mock_resolver,
         )
         .unwrap();
 
@@ -236,7 +235,6 @@ mod tests {
             .expect_resolve_domains()
             .times(1..)
             .returning(|_| Ok(ResolvedAddresses::default()));
-        let resolver = Arc::new(mock_resolver);
 
         let handle = spawn_refresh_thread(
             domains,
@@ -244,7 +242,7 @@ mod tests {
             ebpf,
             allowed_dns_ips,
             Arc::clone(&shutdown_signal),
-            resolver,
+            mock_resolver,
         )
         .unwrap();
 
@@ -290,7 +288,6 @@ mod tests {
             .expect_resolve_domains()
             .times(1..)
             .returning(|_| Err(MoriError::Io(std::io::Error::other("DNS failure"))));
-        let resolver = Arc::new(mock_resolver);
 
         let handle = spawn_refresh_thread(
             domains,
@@ -298,7 +295,7 @@ mod tests {
             ebpf,
             allowed_dns_ips,
             Arc::clone(&shutdown_signal),
-            resolver,
+            mock_resolver,
         )
         .unwrap();
 
