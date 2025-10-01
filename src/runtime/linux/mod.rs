@@ -30,7 +30,29 @@ pub async fn execute_with_network_control(
     args: &[&str],
     policy: &NetworkPolicy,
 ) -> Result<i32, MoriError> {
-    let domain_names = policy.allowed_domains.clone();
+    use crate::policy::AllowPolicy;
+
+    // If policy is allow-all, run without restrictions
+    if matches!(policy.policy, AllowPolicy::All) {
+        let mut child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let status = child.wait()?;
+        return Ok(status.code().unwrap_or(-1));
+    }
+
+    // Extract entries from policy
+    let (allowed_ipv4, domain_names) = match &policy.policy {
+        AllowPolicy::Entries {
+            allowed_ipv4,
+            allowed_domains,
+        } => (allowed_ipv4.clone(), allowed_domains.clone()),
+        AllowPolicy::All => unreachable!("Already handled above"),
+    };
+
     let resolver = SystemDnsResolver;
     let resolved = resolver.resolve_domains(&domain_names).await?;
 
@@ -47,7 +69,7 @@ pub async fn execute_with_network_control(
     // Add allowed IP addresses to the map
     {
         let mut ebpf_guard = ebpf.lock().unwrap();
-        for &ip in &policy.allowed_ipv4 {
+        for &ip in &allowed_ipv4 {
             ebpf_guard.allow_ipv4(ip)?;
             println!("Added {} to allow list", ip);
         }

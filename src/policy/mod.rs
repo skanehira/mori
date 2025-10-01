@@ -5,4 +5,4 @@ pub mod process;
 
 // Re-export main types for backward compatibility and convenience
 pub use model::Policy;
-pub use net::NetworkPolicy;
+pub use net::{AllowPolicy, NetworkPolicy};

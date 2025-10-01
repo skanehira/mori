@@ -90,4 +90,9 @@ pub enum MoriError {
         #[source]
         source: toml::de::Error,
     },
+
+    #[error(
+        "entry-based network policy is not supported on macOS. Use 'allow = true' or 'allow = false' instead"
+    )]
+    EntryBasedPolicyNotSupported,
 }

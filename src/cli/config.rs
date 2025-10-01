@@ -13,11 +13,32 @@ pub struct ConfigFile {
     pub network: NetworkConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NetworkConfig {
-    /// Allowed network destinations (CIDR, IP, domain)
+    /// Allowed network destinations (bool for allow-all/deny-all, or Vec<String> for specific destinations)
     #[serde(default)]
-    pub allow: Vec<String>,
+    pub allow: AllowConfig,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            allow: AllowConfig::Boolean(false),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum AllowConfig {
+    Boolean(bool),
+    Entries(Vec<String>),
+}
+
+impl Default for AllowConfig {
+    fn default() -> Self {
+        AllowConfig::Boolean(false)
+    }
 }
 
 impl ConfigFile {
@@ -32,7 +53,10 @@ impl ConfigFile {
 
     /// Build network policy from configuration file
     pub fn to_policy(&self) -> Result<NetworkPolicy, MoriError> {
-        NetworkPolicy::from_entries(&self.network.allow)
+        match &self.network.allow {
+            AllowConfig::Boolean(allow_all) => Ok(NetworkPolicy::from_allow_all(*allow_all)),
+            AllowConfig::Entries(entries) => NetworkPolicy::from_entries(entries),
+        }
     }
 }
 
@@ -43,6 +67,8 @@ mod tests {
 
     #[test]
     fn load_and_convert_policy() {
+        use crate::policy::AllowPolicy;
+
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         writeln!(
             tmp,
@@ -52,7 +78,35 @@ mod tests {
 
         let config = ConfigFile::load(tmp.path()).unwrap();
         let policy = config.to_policy().unwrap();
-        assert_eq!(policy.allowed_ipv4.len(), 1);
-        assert_eq!(policy.allowed_domains.len(), 1);
+        match policy.policy {
+            AllowPolicy::Entries {
+                allowed_ipv4,
+                allowed_domains,
+            } => {
+                assert_eq!(allowed_ipv4.len(), 1);
+                assert_eq!(allowed_domains.len(), 1);
+            }
+            _ => panic!("Expected Entries variant"),
+        }
+    }
+
+    #[test]
+    fn load_boolean_allow_true() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "[network]\nallow = true\n").unwrap();
+
+        let config = ConfigFile::load(tmp.path()).unwrap();
+        let policy = config.to_policy().unwrap();
+        assert!(policy.is_allow_all());
+    }
+
+    #[test]
+    fn load_boolean_allow_false() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "[network]\nallow = false\n").unwrap();
+
+        let config = ConfigFile::load(tmp.path()).unwrap();
+        let policy = config.to_policy().unwrap();
+        assert!(!policy.is_allow_all());
     }
 }
