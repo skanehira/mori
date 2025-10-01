@@ -1,60 +1,63 @@
 use std::{
     sync::{
-        Arc, Condvar, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-/// Thread shutdown signaling mechanism combining Condvar and AtomicBool
+use tokio::sync::Notify;
+
+/// Async task shutdown signaling mechanism combining Notify and AtomicBool
 ///
-/// This struct provides a clean abstraction for coordinating thread shutdown by combining:
-/// - `Mutex<()>` and `Condvar` for wait/notify pattern
+/// This struct provides a clean abstraction for coordinating async task shutdown by combining:
+/// - `tokio::sync::Notify` for async wait/notify pattern
 /// - `AtomicBool` for lock-free shutdown status checking
 ///
 /// # Design rationale
-/// Using only Condvar has a timing issue: `notify_all()` only wakes threads currently
-/// in `wait()`. If a thread is processing between wait calls, it misses the notification.
-/// The AtomicBool flag ensures the thread can check shutdown status at any time,
-/// not just during wait.
+/// Using only Notify has a timing issue: `notify_waiters()` only wakes tasks that have
+/// already called `notified()`. The AtomicBool flag ensures we can check shutdown status
+/// at any time, preventing missed notifications.
 ///
 /// # Usage
 /// ```no_run
 /// use std::time::Duration;
-/// # use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicBool, Ordering}};
-/// # struct ShutdownSignal { lock: Mutex<()>, condvar: Condvar, shutdown: AtomicBool }
+/// # use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+/// # use tokio::sync::Notify;
+/// # struct ShutdownSignal { notify: Notify, shutdown: AtomicBool }
 /// # impl ShutdownSignal {
-/// #     fn new() -> Arc<Self> { Arc::new(Self { lock: Mutex::new(()), condvar: Condvar::new(), shutdown: AtomicBool::new(false) }) }
-/// #     fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
-/// #         let guard = self.lock.lock().unwrap();
-/// #         let _result = self.condvar.wait_timeout(guard, timeout).unwrap();
-/// #         self.shutdown.load(Ordering::Relaxed)
+/// #     fn new() -> Arc<Self> { Arc::new(Self { notify: Notify::new(), shutdown: AtomicBool::new(false) }) }
+/// #     async fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
+/// #         if self.shutdown.load(Ordering::Relaxed) { return true; }
+/// #         tokio::select! {
+/// #             _ = self.notify.notified() => true,
+/// #             _ = tokio::time::sleep(timeout) => self.shutdown.load(Ordering::Relaxed)
+/// #         }
 /// #     }
-/// #     fn shutdown(&self) { self.shutdown.store(true, Ordering::Relaxed); self.condvar.notify_all(); }
+/// #     fn shutdown(&self) { self.shutdown.store(true, Ordering::Relaxed); self.notify.notify_waiters(); }
 /// # }
-///
+/// # async fn example() {
 /// let signal = ShutdownSignal::new();
 ///
-/// // In worker thread:
-/// if signal.wait_timeout_or_shutdown(Duration::from_millis(1)) {
+/// // In worker task:
+/// if signal.wait_timeout_or_shutdown(Duration::from_millis(1)).await {
 ///     // shutdown requested
 /// }
 ///
-/// // In main thread:
+/// // In main task:
 /// signal.shutdown();
+/// # }
 /// ```
 pub(super) struct ShutdownSignal {
-    lock: Mutex<()>,
-    condvar: Condvar,
+    notify: Notify,
     shutdown: AtomicBool,
 }
 
 impl ShutdownSignal {
     /// Create a new ShutdownSignal
-    pub(super) fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            lock: Mutex::new(()),
-            condvar: Condvar::new(),
+            notify: Notify::new(),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -62,20 +65,25 @@ impl ShutdownSignal {
     /// Wait for timeout or shutdown signal, whichever comes first
     ///
     /// Returns `true` if shutdown was signaled, `false` if timeout occurred
-    pub(super) fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
-        let guard = self.lock.lock().unwrap();
-        let _result = self.condvar.wait_timeout(guard, timeout).unwrap();
+    pub async fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
+        // Check shutdown flag first to avoid timing issues
+        if self.shutdown.load(Ordering::Relaxed) {
+            return true;
+        }
 
-        // Check shutdown flag after waking up
-        // This ensures we catch shutdown even if notified during wait
-        self.shutdown.load(Ordering::Relaxed)
+        tokio::select! {
+            _ = self.notify.notified() => true,
+            _ = tokio::time::sleep(timeout) => {
+                self.shutdown.load(Ordering::Relaxed)
+            }
+        }
     }
 
-    /// Signal shutdown to waiting threads
+    /// Signal shutdown to waiting tasks
     ///
-    /// Sets the shutdown flag and notifies all waiting threads
-    pub(super) fn shutdown(&self) {
+    /// Sets the shutdown flag and notifies all waiting tasks
+    pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        self.condvar.notify_all();
+        self.notify.notify_waiters();
     }
 }

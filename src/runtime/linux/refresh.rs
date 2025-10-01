@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     net::Ipv4Addr,
     sync::{Arc, Mutex},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -72,12 +71,12 @@ pub(super) fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
     allowed_dns_ips: Arc<Mutex<HashSet<Ipv4Addr>>>,
     shutdown_signal: Arc<ShutdownSignal>,
     resolver: Arc<R>,
-) -> Option<thread::JoinHandle<Result<(), MoriError>>> {
+) -> Option<tokio::task::JoinHandle<Result<(), MoriError>>> {
     if domains.is_empty() {
         return None;
     }
 
-    Some(thread::spawn(move || -> Result<(), MoriError> {
+    Some(tokio::spawn(async move {
         loop {
             let now = Instant::now();
             let sleep_duration = {
@@ -88,15 +87,24 @@ pub(super) fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
             };
 
             // Wait for timeout or shutdown signal
-            if shutdown_signal.wait_timeout_or_shutdown(sleep_duration) {
+            if shutdown_signal
+                .wait_timeout_or_shutdown(sleep_duration)
+                .await
+            {
                 return Ok(());
             }
 
-            match resolver.resolve_domains(&domains) {
+            match resolver.resolve_domains(&domains).await {
                 Ok(resolved) => {
                     let now = Instant::now();
-                    apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)?;
-                    apply_dns_servers(&ebpf, &allowed_dns_ips, resolved.dns_v4)?;
+                    let _ = apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)
+                        .inspect_err(|err| {
+                            eprintln!("Failed to apply domain records: {err}");
+                        });
+                    let _ = apply_dns_servers(&ebpf, &allowed_dns_ips, resolved.dns_v4)
+                        .inspect_err(|err| {
+                            eprintln!("Failed to apply DNS servers: {err}");
+                        });
                 }
                 Err(err) => {
                     eprintln!("Failed to refresh DNS records: {err}");
@@ -113,8 +121,8 @@ mod tests {
 
     use super::super::ebpf::MockEbpfController;
 
-    #[test]
-    fn test_empty_domains_returns_none() {
+    #[tokio::test]
+    async fn test_empty_domains_returns_none() {
         let domains = vec![];
         let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
         let ebpf = Arc::new(Mutex::new(MockEbpfController::new()));
@@ -134,8 +142,8 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_notify_causes_early_termination() {
+    #[tokio::test]
+    async fn test_notify_causes_early_termination() {
         let domains = vec!["example.com".to_string()];
         let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
 
@@ -179,16 +187,16 @@ mod tests {
         .unwrap();
 
         // Wait a tiny bit for thread to start, then immediately signal shutdown
-        thread::sleep(Duration::from_micros(100));
+        tokio::time::sleep(Duration::from_micros(100)).await;
         shutdown_signal.shutdown();
 
         // Thread should terminate successfully
-        let result = handle.join().unwrap();
+        let result = handle.await.unwrap();
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_timeout_triggers_dns_resolution() {
+    #[tokio::test]
+    async fn test_timeout_triggers_dns_resolution() {
         let domains = vec!["example.com".to_string()];
         let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
 
@@ -241,17 +249,17 @@ mod tests {
         .unwrap();
 
         // Wait long enough for cache entry to expire (10ms) + margin
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Signal shutdown to terminate
         shutdown_signal.shutdown();
 
-        let result = handle.join().unwrap();
+        let result = handle.await.unwrap();
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_dns_resolution_failure_continues_loop() {
+    #[tokio::test]
+    async fn test_dns_resolution_failure_continues_loop() {
         let domains = vec!["example.com".to_string()];
         let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
 
@@ -295,12 +303,12 @@ mod tests {
         .unwrap();
 
         // Wait to allow at least one DNS resolution attempt (10ms) + margin
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Signal shutdown to terminate
         shutdown_signal.shutdown();
 
-        let result = handle.join().unwrap();
+        let result = handle.await.unwrap();
         // Should terminate successfully despite DNS failures
         assert!(result.is_ok());
     }

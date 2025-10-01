@@ -1,6 +1,6 @@
 use crate::policy::NetworkPolicy;
 
-pub fn execute_with_network_control(
+pub async fn execute_with_network_control(
     _command: &str,
     _args: &[&str],
     _policy: &NetworkPolicy,
