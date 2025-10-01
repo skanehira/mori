@@ -25,14 +25,14 @@ use refresh::{apply_dns_servers, apply_domain_records, spawn_refresh_thread};
 use sync::ShutdownSignal;
 
 /// Execute a command in a controlled cgroup with network restrictions
-pub fn execute_with_network_control(
+pub async fn execute_with_network_control(
     command: &str,
     args: &[&str],
     policy: &NetworkPolicy,
 ) -> Result<i32, MoriError> {
     let domain_names = policy.allowed_domains.clone();
     let resolver = SystemDnsResolver;
-    let resolved = resolver.resolve_domains(&domain_names)?;
+    let resolved = resolver.resolve_domains(&domain_names).await?;
 
     // Create and setup cgroup
     let cgroup = CgroupManager::create()?;
@@ -88,7 +88,7 @@ pub fn execute_with_network_control(
     shutdown_signal.shutdown();
     if let Some(handle) = refresh_handle {
         handle
-            .join()
+            .await
             .map_err(|_| std::io::Error::other("refresh thread panicked"))
             .map_err(MoriError::Io)??;
     }

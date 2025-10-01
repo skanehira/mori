@@ -19,7 +19,8 @@ struct Args {
     command: Vec<String>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let args = Args::parse();
@@ -38,6 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_policy = NetworkPolicy::from_entries(&args.allow_network)?;
     policy.merge(cli_policy);
 
-    let exit_code = execute_with_network_control(command, &command_args, &policy)?;
+    let exit_code = execute_with_network_control(command, &command_args, &policy).await?;
     std::process::exit(exit_code);
 }

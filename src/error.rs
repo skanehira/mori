@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
 use aya::{EbpfError, maps::MapError, programs::ProgramError};
-use hickory_resolver::error::ResolveError;
+use hickory_resolver::ResolveError;
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Error)]

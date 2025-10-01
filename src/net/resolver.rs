@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
 };
 
+use async_trait::async_trait;
 use hickory_resolver::{Resolver, config::ResolverConfig, system_conf};
 
 #[cfg(test)]
@@ -27,13 +28,15 @@ pub struct ResolvedAddresses {
 
 /// DNS resolver abstraction for testing
 #[cfg_attr(test, automock)]
+#[async_trait]
 pub trait DnsResolver: Send + Sync + 'static {
-    fn resolve_domains(&self, domains: &[String]) -> Result<ResolvedAddresses, MoriError>;
+    async fn resolve_domains(&self, domains: &[String]) -> Result<ResolvedAddresses, MoriError>;
 }
 
 /// Production DNS resolver using the system resolver
 pub struct SystemDnsResolver;
 
+#[async_trait]
 impl DnsResolver for SystemDnsResolver {
     /// Resolve domain names to IPv4 addresses and collect DNS server IPs
     ///
@@ -49,36 +52,38 @@ impl DnsResolver for SystemDnsResolver {
     /// * `Err(MoriError)` - If DNS resolver initialization or lookup fails
     ///
     /// # Examples
-    /// ```
-    /// use crate::mori::net::SystemDnsResolver;
-    /// use crate::mori::net::DnsResolver as _;
+    /// ```no_run
+    /// use mori::net::{SystemDnsResolver, DnsResolver};
     ///
+    /// # async fn example() {
     /// let resolver = SystemDnsResolver;
     /// let domains = vec!["example.com".to_string()];
-    /// let resolved = resolver.resolve_domains(&domains).unwrap();
+    /// let resolved = resolver.resolve_domains(&domains).await.unwrap();
+    /// # }
     /// ```
-    fn resolve_domains(&self, domains: &[String]) -> Result<ResolvedAddresses, MoriError> {
+    async fn resolve_domains(&self, domains: &[String]) -> Result<ResolvedAddresses, MoriError> {
         if domains.is_empty() {
             return Ok(ResolvedAddresses::default());
         }
 
-        let (config, opts) = system_conf::read_system_conf()
-            .map_err(|source| MoriError::DnsResolverInit { source })?;
-
-        let resolver = Resolver::new(config.clone(), opts).map_err(MoriError::Io)?;
-
+        let config = system_conf::read_system_conf()
+            .map_err(|source| MoriError::DnsResolverInit { source })?
+            .0;
         let nameservers = collect_nameserver_ips(&config);
+
+        let resolver = Resolver::builder_tokio().unwrap().build();
+        //let resolver = Resolver::new(config.clone(), opts).map_err(MoriError::Io)?;
 
         let mut domain_records = Vec::with_capacity(domains.len());
 
         for domain in domains {
-            let response =
-                resolver
-                    .lookup_ip(domain.as_str())
-                    .map_err(|source| MoriError::DnsLookup {
-                        domain: domain.clone(),
-                        source,
-                    })?;
+            let response = resolver
+                .lookup_ip(domain.as_str())
+                .await
+                .map_err(|source| MoriError::DnsLookup {
+                    domain: domain.clone(),
+                    source,
+                })?;
 
             let valid_until = response.valid_until();
             let mut records = Vec::new();
@@ -128,11 +133,11 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    #[test]
-    fn test_resolve_domain_success() {
+    #[tokio::test]
+    async fn test_resolve_domain_success() {
         let domains = vec!["localhost".to_string()];
         let resolver = SystemDnsResolver;
-        let resolved = resolver.resolve_domains(&domains).unwrap();
+        let resolved = resolver.resolve_domains(&domains).await.unwrap();
         let record = resolved
             .domains
             .iter()
