@@ -62,14 +62,19 @@ impl DnsResolver for SystemDnsResolver {
     /// # }
     /// ```
     async fn resolve_domains(&self, domains: &[String]) -> Result<ResolvedAddresses, MoriError> {
-        if domains.is_empty() {
-            return Ok(ResolvedAddresses::default());
-        }
-
+        // Always read system DNS configuration to get nameserver IPs
+        // DNS servers must be allowed even when no domains are specified
         let config = system_conf::read_system_conf()
             .map_err(|source| MoriError::DnsResolverInit { source })?
             .0;
         let nameservers = collect_nameserver_ips(&config);
+
+        if domains.is_empty() {
+            return Ok(ResolvedAddresses {
+                domains: Vec::new(),
+                dns_v4: nameservers,
+            });
+        }
 
         let resolver = Resolver::builder_tokio().unwrap().build();
         //let resolver = Resolver::new(config.clone(), opts).map_err(MoriError::Io)?;
