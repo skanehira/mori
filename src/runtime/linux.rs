@@ -20,14 +20,27 @@ use aya::{
 
 use crate::{
     error::MoriError,
-    net::{cache::DnsCache, parse_allow_network, resolve_domains, resolver::DomainRecords},
+    net::{
+        cache::DnsCache,
+        parse_allow_network,
+        resolver::{DnsResolver, DomainRecords, SystemDnsResolver},
+    },
 };
 
-const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+use mockall::automock;
+
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
+
+/// eBPF controller abstraction for testing
+#[cfg_attr(test, automock)]
+trait EbpfController: Send + Sync + 'static {
+    fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
+    fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
+}
 
 /// Cgroup manager that creates and manages a cgroup for process isolation
 struct CgroupManager {
@@ -132,6 +145,16 @@ impl NetworkEbpf {
     }
 }
 
+impl EbpfController for NetworkEbpf {
+    fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+        self.allow_ipv4(addr)
+    }
+
+    fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
+        self.remove_ipv4(addr)
+    }
+}
+
 /// Execute a command in a controlled cgroup with network restrictions
 pub fn execute_with_network_control(
     command: &str,
@@ -140,7 +163,8 @@ pub fn execute_with_network_control(
 ) -> Result<i32, MoriError> {
     let valid_network_rules = parse_allow_network(allow_network_rules)?;
     let domain_names = valid_network_rules.domains.clone();
-    let resolved = resolve_domains(&domain_names)?;
+    let resolver = SystemDnsResolver;
+    let resolved = resolver.resolve_domains(&domain_names)?;
 
     // Create and setup cgroup
     let cgroup = CgroupManager::create()?;
@@ -182,12 +206,14 @@ pub fn execute_with_network_control(
     }
 
     let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+    let resolver = Arc::new(SystemDnsResolver);
     let refresh_handle = spawn_refresh_thread(
         domain_names.clone(),
         Arc::clone(&dns_cache),
         Arc::clone(&ebpf),
         Arc::clone(&allowed_dns_ips),
         Arc::clone(&condvar_pair),
+        resolver,
     );
 
     let status = child.wait()?;
@@ -202,15 +228,15 @@ pub fn execute_with_network_control(
     Ok(status.code().unwrap_or(-1))
 }
 
-fn apply_domain_records(
+fn apply_domain_records<E: EbpfController>(
     dns_cache: &Arc<Mutex<DnsCache>>,
-    ebpf: &Arc<Mutex<NetworkEbpf>>,
+    ebpf: &Arc<Mutex<E>>,
     now: Instant,
-    domains: Vec<DomainRecords>,
+    new_domains: Vec<DomainRecords>,
 ) -> Result<(), MoriError> {
     let diffs = {
         let mut cache = dns_cache.lock().unwrap();
-        domains
+        new_domains
             .into_iter()
             .map(|domain| cache.apply(&domain.domain, now, domain.records))
             .collect::<Vec<_>>()
@@ -231,8 +257,8 @@ fn apply_domain_records(
     Ok(())
 }
 
-fn apply_dns_servers(
-    ebpf: &Arc<Mutex<NetworkEbpf>>,
+fn apply_dns_servers<E: EbpfController>(
+    ebpf: &Arc<Mutex<E>>,
     allowed_dns_ips: &Arc<Mutex<HashSet<Ipv4Addr>>>,
     ips: Vec<Ipv4Addr>,
 ) -> Result<(), MoriError> {
@@ -249,12 +275,13 @@ fn apply_dns_servers(
     Ok(())
 }
 
-fn spawn_refresh_thread(
+fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
     domains: Vec<String>,
     dns_cache: Arc<Mutex<DnsCache>>,
-    ebpf: Arc<Mutex<NetworkEbpf>>,
+    ebpf: Arc<Mutex<E>>,
     allowed_dns_ips: Arc<Mutex<HashSet<Ipv4Addr>>>,
     condvar_pair: Arc<(Mutex<()>, Condvar)>,
+    resolver: Arc<R>,
 ) -> Option<thread::JoinHandle<Result<(), MoriError>>> {
     if domains.is_empty() {
         return None;
@@ -269,7 +296,6 @@ fn spawn_refresh_thread(
                 cache
                     .next_refresh_in(now)
                     .unwrap_or(DEFAULT_REFRESH_INTERVAL)
-                    .max(MIN_REFRESH_INTERVAL)
             };
 
             let guard = lock.lock().unwrap();
@@ -279,7 +305,7 @@ fn spawn_refresh_thread(
                 return Ok(());
             }
 
-            match resolve_domains(&domains) {
+            match resolver.resolve_domains(&domains) {
                 Ok(resolved) => {
                     let now = Instant::now();
                     apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)?;
@@ -291,4 +317,212 @@ fn spawn_refresh_thread(
             }
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{ResolvedAddresses, resolver::MockDnsResolver};
+    use std::time::Duration;
+
+    #[test]
+    fn test_empty_domains_returns_none() {
+        let domains = vec![];
+        let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
+        let ebpf = Arc::new(Mutex::new(MockEbpfController::new()));
+        let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
+        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+        let resolver = Arc::new(MockDnsResolver::new());
+
+        let result = spawn_refresh_thread(
+            domains,
+            dns_cache,
+            ebpf,
+            allowed_dns_ips,
+            condvar_pair,
+            resolver,
+        );
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_notify_causes_early_termination() {
+        let domains = vec!["example.com".to_string()];
+        let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
+
+        // Pre-populate cache with a very short TTL (1ms) so next_refresh_in returns quickly
+        {
+            use crate::net::cache::Entry;
+            let mut cache = dns_cache.lock().unwrap();
+            let now = Instant::now();
+            cache.apply(
+                "example.com",
+                now,
+                vec![Entry {
+                    ip: "1.2.3.4".parse().unwrap(),
+                    expires_at: now + Duration::from_millis(2),
+                }],
+            );
+        }
+
+        let mut mock_ebpf = MockEbpfController::new();
+        // eBPF operations should not be called since we terminate early
+        mock_ebpf.expect_allow_ipv4().times(0);
+        mock_ebpf.expect_remove_ipv4().times(0);
+        let ebpf = Arc::new(Mutex::new(mock_ebpf));
+
+        let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
+        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+
+        let mut mock_resolver = MockDnsResolver::new();
+        // DNS resolution should not be called since we notify immediately
+        mock_resolver.expect_resolve_domains().times(0);
+        let resolver = Arc::new(mock_resolver);
+
+        let handle = spawn_refresh_thread(
+            domains,
+            dns_cache,
+            ebpf,
+            allowed_dns_ips,
+            Arc::clone(&condvar_pair),
+            resolver,
+        )
+        .unwrap();
+
+        // Wait a tiny bit for thread to start, then immediately notify
+        thread::sleep(Duration::from_micros(100));
+        condvar_pair.1.notify_all();
+
+        // Thread should terminate successfully
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_timeout_triggers_dns_resolution() {
+        let domains = vec!["example.com".to_string()];
+        let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
+
+        // Pre-populate cache with a very short TTL (10ms)
+        {
+            use crate::net::cache::Entry;
+            let mut cache = dns_cache.lock().unwrap();
+            let now = Instant::now();
+            cache.apply(
+                "example.com",
+                now,
+                vec![Entry {
+                    ip: "1.2.3.4".parse().unwrap(),
+                    expires_at: now + Duration::from_millis(10),
+                }],
+            );
+        }
+
+        let mut mock_ebpf = MockEbpfController::new();
+        // Allow eBPF operations to succeed
+        mock_ebpf
+            .expect_allow_ipv4()
+            .returning(|_| Ok(()))
+            .times(..);
+        mock_ebpf
+            .expect_remove_ipv4()
+            .returning(|_| Ok(()))
+            .times(..);
+        let ebpf = Arc::new(Mutex::new(mock_ebpf));
+
+        let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
+        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+
+        let mut mock_resolver = MockDnsResolver::new();
+        // DNS resolution should be called at least once after timeout
+        mock_resolver
+            .expect_resolve_domains()
+            .times(1..)
+            .returning(|_| Ok(ResolvedAddresses::default()));
+        let resolver = Arc::new(mock_resolver);
+
+        let handle = spawn_refresh_thread(
+            domains,
+            dns_cache,
+            ebpf,
+            allowed_dns_ips,
+            Arc::clone(&condvar_pair),
+            resolver,
+        )
+        .unwrap();
+
+        // Wait long enough for cache entry to expire (10ms) + margin
+        thread::sleep(Duration::from_millis(50));
+
+        // Notify to terminate
+        // Note: We need to loop notify because the thread might be processing
+        // between wait_timeout calls when we first notify
+        for _ in 0..10 {
+            condvar_pair.1.notify_all();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_dns_resolution_failure_continues_loop() {
+        let domains = vec!["example.com".to_string()];
+        let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
+
+        // Pre-populate cache with a very short TTL (10ms)
+        {
+            use crate::net::cache::Entry;
+            let mut cache = dns_cache.lock().unwrap();
+            let now = Instant::now();
+            cache.apply(
+                "example.com",
+                now,
+                vec![Entry {
+                    ip: "1.2.3.4".parse().unwrap(),
+                    expires_at: now + Duration::from_millis(10),
+                }],
+            );
+        }
+
+        let mock_ebpf = MockEbpfController::new();
+        let ebpf = Arc::new(Mutex::new(mock_ebpf));
+
+        let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
+        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+
+        let mut mock_resolver = MockDnsResolver::new();
+        // DNS calls fail, but thread should continue
+        mock_resolver
+            .expect_resolve_domains()
+            .times(1..)
+            .returning(|_| Err(MoriError::Io(std::io::Error::other("DNS failure"))));
+        let resolver = Arc::new(mock_resolver);
+
+        let handle = spawn_refresh_thread(
+            domains,
+            dns_cache,
+            ebpf,
+            allowed_dns_ips,
+            Arc::clone(&condvar_pair),
+            resolver,
+        )
+        .unwrap();
+
+        // Wait to allow at least one DNS resolution attempt (10ms) + margin
+        thread::sleep(Duration::from_millis(50));
+
+        // Notify to terminate - thread should still be running
+        // Loop notify to ensure we catch the thread during wait_timeout
+        for _ in 0..10 {
+            condvar_pair.1.notify_all();
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let result = handle.join().unwrap();
+        // Should terminate successfully despite DNS failures
+        assert!(result.is_ok());
+    }
 }

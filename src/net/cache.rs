@@ -22,11 +22,32 @@ pub struct DnsCache {
 }
 
 impl DnsCache {
-    pub fn apply(&mut self, domain: &str, now: Instant, entries: Vec<Entry>) -> UpdateDiff {
+    /// Apply new DNS resolution results and calculate the diff from previous state
+    ///
+    /// Updates the cache for a given domain with new DNS entries and returns
+    /// which IP addresses were added or removed since the last update.
+    ///
+    /// # Behavior
+    /// 1. Filters out already-expired entries (where `expires_at <= now`)
+    /// 2. For duplicate IPs in new entries, keeps the one with latest expiration
+    /// 3. Compares new state with previous state to detect changes
+    /// 4. Returns `UpdateDiff` containing:
+    ///    - `added`: IPs present in new state but not in previous state
+    ///    - `removed`: IPs present in previous state but not in new state
+    /// 5. Replaces the domain's cached state with the new state
+    ///
+    /// # Arguments
+    /// * `domain` - The domain name to update
+    /// * `now` - Current timestamp for expiration checking
+    /// * `entries` - New DNS resolution results with IP addresses and expiration times
+    ///
+    /// # Returns
+    /// `UpdateDiff` containing added and removed IP addresses
+    pub fn apply(&mut self, domain: &str, now: Instant, new_entries: Vec<Entry>) -> UpdateDiff {
         let state = self.per_domain.entry(domain.to_string()).or_default();
 
         let mut new_state: HashMap<Ipv4Addr, Instant> = HashMap::new();
-        for entry in entries {
+        for entry in new_entries {
             if entry.expires_at <= now {
                 continue;
             }
@@ -62,6 +83,17 @@ impl DnsCache {
         UpdateDiff { added, removed }
     }
 
+    /// Calculate the duration until the next DNS refresh is needed
+    ///
+    /// Returns the time until the earliest expiring entry across all cached domains.
+    /// This allows the refresh thread to sleep for the optimal duration before
+    /// re-resolving domain names.
+    ///
+    /// # Behavior
+    /// - Iterates through all domains and their IP entries
+    /// - Calculates time remaining until each entry expires (saturating to 0 if already expired)
+    /// - Returns the minimum duration (earliest expiration)
+    /// - Returns `None` if cache is empty
     pub fn next_refresh_in(&self, now: Instant) -> Option<Duration> {
         self.per_domain
             .values()
