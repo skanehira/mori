@@ -7,7 +7,10 @@ use std::{
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
     process::{self, Command, Stdio},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -34,6 +37,80 @@ const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
+
+/// Thread shutdown signaling mechanism combining Condvar and AtomicBool
+///
+/// This struct provides a clean abstraction for coordinating thread shutdown by combining:
+/// - `Mutex<()>` and `Condvar` for wait/notify pattern
+/// - `AtomicBool` for lock-free shutdown status checking
+///
+/// # Design rationale
+/// Using only Condvar has a timing issue: `notify_all()` only wakes threads currently
+/// in `wait()`. If a thread is processing between wait calls, it misses the notification.
+/// The AtomicBool flag ensures the thread can check shutdown status at any time,
+/// not just during wait.
+///
+/// # Usage
+/// ```no_run
+/// use std::time::Duration;
+/// # use std::sync::{Arc, Mutex, Condvar, atomic::{AtomicBool, Ordering}};
+/// # struct ShutdownSignal { lock: Mutex<()>, condvar: Condvar, shutdown: AtomicBool }
+/// # impl ShutdownSignal {
+/// #     fn new() -> Arc<Self> { Arc::new(Self { lock: Mutex::new(()), condvar: Condvar::new(), shutdown: AtomicBool::new(false) }) }
+/// #     fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
+/// #         let guard = self.lock.lock().unwrap();
+/// #         let _result = self.condvar.wait_timeout(guard, timeout).unwrap();
+/// #         self.shutdown.load(Ordering::Relaxed)
+/// #     }
+/// #     fn shutdown(&self) { self.shutdown.store(true, Ordering::Relaxed); self.condvar.notify_all(); }
+/// # }
+///
+/// let signal = ShutdownSignal::new();
+///
+/// // In worker thread:
+/// if signal.wait_timeout_or_shutdown(Duration::from_millis(1)) {
+///     // shutdown requested
+/// }
+///
+/// // In main thread:
+/// signal.shutdown();
+/// ```
+struct ShutdownSignal {
+    lock: Mutex<()>,
+    condvar: Condvar,
+    shutdown: AtomicBool,
+}
+
+impl ShutdownSignal {
+    /// Create a new ShutdownSignal
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            lock: Mutex::new(()),
+            condvar: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    /// Wait for timeout or shutdown signal, whichever comes first
+    ///
+    /// Returns `true` if shutdown was signaled, `false` if timeout occurred
+    fn wait_timeout_or_shutdown(&self, timeout: Duration) -> bool {
+        let guard = self.lock.lock().unwrap();
+        let _result = self.condvar.wait_timeout(guard, timeout).unwrap();
+
+        // Check shutdown flag after waking up
+        // This ensures we catch shutdown even if notified during wait
+        self.shutdown.load(Ordering::Relaxed)
+    }
+
+    /// Signal shutdown to waiting threads
+    ///
+    /// Sets the shutdown flag and notifies all waiting threads
+    fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.condvar.notify_all();
+    }
+}
 
 /// eBPF controller abstraction for testing
 #[cfg_attr(test, automock)]
@@ -205,19 +282,19 @@ pub fn execute_with_network_control(
         return Ok(status.code().unwrap_or(-1));
     }
 
-    let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+    let shutdown_signal = ShutdownSignal::new();
     let resolver = Arc::new(SystemDnsResolver);
     let refresh_handle = spawn_refresh_thread(
         domain_names.clone(),
         Arc::clone(&dns_cache),
         Arc::clone(&ebpf),
         Arc::clone(&allowed_dns_ips),
-        Arc::clone(&condvar_pair),
+        Arc::clone(&shutdown_signal),
         resolver,
     );
 
     let status = child.wait()?;
-    condvar_pair.1.notify_all();
+    shutdown_signal.shutdown();
     if let Some(handle) = refresh_handle {
         handle
             .join()
@@ -280,7 +357,7 @@ fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
     dns_cache: Arc<Mutex<DnsCache>>,
     ebpf: Arc<Mutex<E>>,
     allowed_dns_ips: Arc<Mutex<HashSet<Ipv4Addr>>>,
-    condvar_pair: Arc<(Mutex<()>, Condvar)>,
+    shutdown_signal: Arc<ShutdownSignal>,
     resolver: Arc<R>,
 ) -> Option<thread::JoinHandle<Result<(), MoriError>>> {
     if domains.is_empty() {
@@ -288,7 +365,6 @@ fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
     }
 
     Some(thread::spawn(move || -> Result<(), MoriError> {
-        let (lock, condvar) = &*condvar_pair;
         loop {
             let now = Instant::now();
             let sleep_duration = {
@@ -298,10 +374,8 @@ fn spawn_refresh_thread<R: DnsResolver, E: EbpfController>(
                     .unwrap_or(DEFAULT_REFRESH_INTERVAL)
             };
 
-            let guard = lock.lock().unwrap();
-            let result = condvar.wait_timeout(guard, sleep_duration).unwrap();
-
-            if !result.1.timed_out() {
+            // Wait for timeout or shutdown signal
+            if shutdown_signal.wait_timeout_or_shutdown(sleep_duration) {
                 return Ok(());
             }
 
@@ -331,7 +405,7 @@ mod tests {
         let dns_cache = Arc::new(Mutex::new(DnsCache::default()));
         let ebpf = Arc::new(Mutex::new(MockEbpfController::new()));
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
-        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+        let shutdown_signal = ShutdownSignal::new();
         let resolver = Arc::new(MockDnsResolver::new());
 
         let result = spawn_refresh_thread(
@@ -339,7 +413,7 @@ mod tests {
             dns_cache,
             ebpf,
             allowed_dns_ips,
-            condvar_pair,
+            shutdown_signal,
             resolver,
         );
 
@@ -373,10 +447,10 @@ mod tests {
         let ebpf = Arc::new(Mutex::new(mock_ebpf));
 
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
-        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+        let shutdown_signal = ShutdownSignal::new();
 
         let mut mock_resolver = MockDnsResolver::new();
-        // DNS resolution should not be called since we notify immediately
+        // DNS resolution should not be called since we shutdown immediately
         mock_resolver.expect_resolve_domains().times(0);
         let resolver = Arc::new(mock_resolver);
 
@@ -385,14 +459,14 @@ mod tests {
             dns_cache,
             ebpf,
             allowed_dns_ips,
-            Arc::clone(&condvar_pair),
+            Arc::clone(&shutdown_signal),
             resolver,
         )
         .unwrap();
 
-        // Wait a tiny bit for thread to start, then immediately notify
+        // Wait a tiny bit for thread to start, then immediately signal shutdown
         thread::sleep(Duration::from_micros(100));
-        condvar_pair.1.notify_all();
+        shutdown_signal.shutdown();
 
         // Thread should terminate successfully
         let result = handle.join().unwrap();
@@ -432,7 +506,7 @@ mod tests {
         let ebpf = Arc::new(Mutex::new(mock_ebpf));
 
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
-        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+        let shutdown_signal = ShutdownSignal::new();
 
         let mut mock_resolver = MockDnsResolver::new();
         // DNS resolution should be called at least once after timeout
@@ -447,7 +521,7 @@ mod tests {
             dns_cache,
             ebpf,
             allowed_dns_ips,
-            Arc::clone(&condvar_pair),
+            Arc::clone(&shutdown_signal),
             resolver,
         )
         .unwrap();
@@ -455,13 +529,8 @@ mod tests {
         // Wait long enough for cache entry to expire (10ms) + margin
         thread::sleep(Duration::from_millis(50));
 
-        // Notify to terminate
-        // Note: We need to loop notify because the thread might be processing
-        // between wait_timeout calls when we first notify
-        for _ in 0..10 {
-            condvar_pair.1.notify_all();
-            thread::sleep(Duration::from_millis(2));
-        }
+        // Signal shutdown to terminate
+        shutdown_signal.shutdown();
 
         let result = handle.join().unwrap();
         assert!(result.is_ok());
@@ -491,7 +560,7 @@ mod tests {
         let ebpf = Arc::new(Mutex::new(mock_ebpf));
 
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
-        let condvar_pair = Arc::new((Mutex::new(()), Condvar::new()));
+        let shutdown_signal = ShutdownSignal::new();
 
         let mut mock_resolver = MockDnsResolver::new();
         // DNS calls fail, but thread should continue
@@ -506,7 +575,7 @@ mod tests {
             dns_cache,
             ebpf,
             allowed_dns_ips,
-            Arc::clone(&condvar_pair),
+            Arc::clone(&shutdown_signal),
             resolver,
         )
         .unwrap();
@@ -514,12 +583,8 @@ mod tests {
         // Wait to allow at least one DNS resolution attempt (10ms) + margin
         thread::sleep(Duration::from_millis(50));
 
-        // Notify to terminate - thread should still be running
-        // Loop notify to ensure we catch the thread during wait_timeout
-        for _ in 0..10 {
-            condvar_pair.1.notify_all();
-            thread::sleep(Duration::from_millis(2));
-        }
+        // Signal shutdown to terminate
+        shutdown_signal.shutdown();
 
         let result = handle.join().unwrap();
         // Should terminate successfully despite DNS failures

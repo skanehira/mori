@@ -9,3 +9,4 @@ run-deny: build
 
 test:
 	@cargo nextest run
+	@cargo test --doc
