@@ -14,9 +14,9 @@ use crate::{
     error::MoriError,
     net::{
         cache::DnsCache,
-        parse_allow_network,
         resolver::{DnsResolver, SystemDnsResolver},
     },
+    policy::NetworkPolicy,
 };
 
 use cgroup::CgroupManager;
@@ -28,10 +28,9 @@ use sync::ShutdownSignal;
 pub fn execute_with_network_control(
     command: &str,
     args: &[&str],
-    allow_network_rules: &[String],
+    policy: &NetworkPolicy,
 ) -> Result<i32, MoriError> {
-    let valid_network_rules = parse_allow_network(allow_network_rules)?;
-    let domain_names = valid_network_rules.domains.clone();
+    let domain_names = policy.allowed_domains.clone();
     let resolver = SystemDnsResolver;
     let resolved = resolver.resolve_domains(&domain_names)?;
 
@@ -48,7 +47,7 @@ pub fn execute_with_network_control(
     // Add allowed IP addresses to the map
     {
         let mut ebpf_guard = ebpf.lock().unwrap();
-        for &ip in &valid_network_rules.direct_v4 {
+        for &ip in &policy.allowed_ipv4 {
             ebpf_guard.allow_ipv4(ip)?;
             println!("Added {} to allow list", ip);
         }

@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use std::path::PathBuf;
+
 #[cfg(target_os = "linux")]
 use aya::{EbpfError, maps::MapError, programs::ProgramError};
 use hickory_resolver::error::ResolveError;
@@ -48,6 +50,13 @@ pub enum MoriError {
 
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },
+
+    #[error("failed to parse config {path}: {source}")]
+    ConfigParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -74,4 +83,11 @@ pub enum MoriError {
 
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },
+
+    #[error("failed to parse config {path}: {source}")]
+    ConfigParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
 }
