@@ -6,3 +6,7 @@ run-allow: build
 
 run-deny: build
 	@sudo ./target/release/mori -- ping -c 1 www.google.com
+
+test:
+	@cargo nextest run
+	@cargo test --doc

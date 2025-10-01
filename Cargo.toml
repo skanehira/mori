@@ -23,6 +23,7 @@ aya-log = "0.2.1"
 
 [dev-dependencies]
 rstest = "0.23"
+mockall = "0.13"
 
 [build-dependencies]
 aya-build = "0.1.2"
