@@ -1,18 +1,10 @@
-use std::{
-    convert::TryFrom,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
-};
+use std::{convert::TryFrom, os::fd::BorrowedFd};
 
 use aya::{
     maps::HashMap,
     programs::lsm::{Lsm, LsmLinkId},
     Btf, Ebpf,
 };
-use aya_obj::generated::{
-    bpf_attach_type, bpf_attr, bpf_attr__bindgen_ty_14, bpf_attr__bindgen_ty_14__bindgen_ty_1,
-    bpf_attr__bindgen_ty_14__bindgen_ty_2, bpf_cmd,
-};
-use libc::SYS_bpf;
 
 use crate::{
     error::MoriError,
@@ -35,6 +27,17 @@ impl FileEbpf {
         cgroup_fd: BorrowedFd<'_>,
     ) -> Result<Self, MoriError> {
         let btf = Btf::from_sys_fs()?;
+
+        // Get cgroup ID and register it in TARGET_CGROUP map
+        // Note: We use system-wide LSM attach + cgroup ID filtering because:
+        // - file_open is a sleepable LSM hook
+        // - BPF_LSM_CGROUP attach type only supports non-sleepable hooks
+        let cgroup_id = get_cgroup_id(cgroup_fd)?;
+        let mut target_cgroup: HashMap<_, u64, u8> =
+            HashMap::try_from(bpf.map_mut("TARGET_CGROUP").unwrap())?;
+        target_cgroup.insert(cgroup_id, 1, 0)?;
+        log::info!("Target cgroup ID: {}", cgroup_id);
+
         // Populate DENY_PATHS map (deny-list mode)
         let mut deny_paths: HashMap<_, [u8; PATH_MAX], u8> =
             HashMap::try_from(bpf.map_mut("DENY_PATHS").unwrap())?;
@@ -120,47 +123,14 @@ impl FileEbpf {
     }
 }
 
-fn attach_lsm_cgroup(
-    program: &mut Lsm,
-    name: &str,
-    cgroup_fd: BorrowedFd<'_>,
-) -> Result<OwnedFd, MoriError> {
-    let prog_fd = program
-        .fd()
-        .map_err(|source| MoriError::ProgramAttach {
-            name: name.to_string(),
-            source,
-        })?
-        .as_fd();
+/// Get cgroup ID from cgroup file descriptor using fstat
+fn get_cgroup_id(cgroup_fd: BorrowedFd<'_>) -> Result<u64, MoriError> {
+    use std::os::unix::fs::MetadataExt;
 
-    let mut attr: bpf_attr = unsafe { std::mem::zeroed() };
-    let mut link_create: bpf_attr__bindgen_ty_14 = unsafe { std::mem::zeroed() };
+    // Use fstat to get file metadata directly from fd
+    // The inode number of the cgroup directory is the cgroup ID
+    let metadata = std::fs::File::from(cgroup_fd.try_clone_to_owned()?).metadata()?;
+    let cgroup_id = metadata.ino();
 
-    link_create.__bindgen_anon_1 = bpf_attr__bindgen_ty_14__bindgen_ty_1 {
-        prog_fd: prog_fd.as_raw_fd() as u32,
-    };
-    link_create.__bindgen_anon_2 = bpf_attr__bindgen_ty_14__bindgen_ty_2 {
-        target_fd: cgroup_fd.as_raw_fd() as u32,
-    };
-    link_create.attach_type = bpf_attach_type::BPF_LSM_CGROUP as u32;
-    link_create.flags = 0;
-
-    attr.link_create = link_create;
-
-    let ret = unsafe {
-        libc::syscall(
-            SYS_bpf,
-            bpf_cmd::BPF_LINK_CREATE as libc::c_long,
-            &mut attr as *mut _,
-            std::mem::size_of::<bpf_attr>(),
-        )
-    };
-
-    if ret < 0 {
-        return Err(MoriError::Io(std::io::Error::last_os_error()));
-    }
-
-    // SAFETY: on success syscall returns a new FD we must own
-    let fd = unsafe { OwnedFd::from_raw_fd(ret as RawFd) };
-    Ok(fd)
+    Ok(cgroup_id)
 }

@@ -8,7 +8,7 @@
 mod vmlinux;
 
 use aya_ebpf::{
-    helpers::bpf_d_path,
+    helpers::{bpf_d_path, bpf_get_current_cgroup_id},
     macros::{cgroup_sock_addr, lsm, map},
     maps::HashMap,
     programs::{LsmContext, SockAddrContext},
@@ -23,6 +23,14 @@ const PATH_MAX: usize = 64;
 // Allow list for IPv4 addresses; value presence (1) means allowed
 #[map]
 static ALLOW_V4: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
+
+// Target cgroup ID for file access control
+// Note: BPF_LSM_CGROUP attach type cannot be used for file_open hook because:
+// - file_open is a sleepable LSM hook
+// - BPF_LSM_CGROUP only supports non-sleepable hooks
+// Therefore, we use system-wide LSM attach and filter by cgroup ID in the program
+#[map]
+static TARGET_CGROUP: HashMap<u64, u8> = HashMap::with_max_entries(1, 0);
 
 // Deny list for file paths; value is access mode (1=READ, 2=WRITE, 3=READ|WRITE)
 #[map]
@@ -46,6 +54,13 @@ pub fn mori_path_open(ctx: LsmContext) -> i32 {
 }
 
 fn try_path_open(ctx: &LsmContext) -> Result<(), i32> {
+    // Check if current process is in target cgroup
+    // This filters events to only processes within the monitored cgroup
+    let cgroup_id = unsafe { bpf_get_current_cgroup_id() };
+    if unsafe { TARGET_CGROUP.get(&cgroup_id).is_none() } {
+        return Ok(()); // Not in target cgroup, allow
+    }
+
     // Get file pointer from LSM context (file_open hook receives struct file *)
     let file_ptr = unsafe { ctx.arg::<*const file>(0) };
     if file_ptr.is_null() {
