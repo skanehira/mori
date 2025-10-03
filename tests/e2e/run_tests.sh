@@ -7,7 +7,11 @@ cd "$(dirname "$0")"
 
 case "$(uname -s)" in
     Linux)
-        exec ./test_linux.sh
+        echo "Running network tests..."
+        ./test_linux.sh
+        echo ""
+        echo "Running file access control tests..."
+        ./test_file_access.sh
         ;;
     Darwin)
         exec ./test_macos.sh

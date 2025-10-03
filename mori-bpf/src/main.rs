@@ -22,6 +22,17 @@ const DENY: i32 = 0;
 
 const PATH_MAX: usize = 64;
 
+// Access mode flags (matching userspace AccessMode enum)
+const ACCESS_MODE_READ: u8 = 1;
+const ACCESS_MODE_WRITE: u8 = 2;
+const ACCESS_MODE_READWRITE: u8 = 3;
+
+// File open flags from Linux kernel (include/uapi/asm-generic/fcntl.h)
+const O_ACCMODE: u32 = 0x0003; // Mask to extract access mode from flags
+const O_RDONLY: u32 = 0x0000; // Open for reading only
+const O_WRONLY: u32 = 0x0001; // Open for writing only
+const O_RDWR: u32 = 0x0002; // Open for reading and writing
+
 // Allow list for IPv4 addresses; value presence (1) means allowed
 #[map]
 static ALLOW_V4: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
@@ -105,11 +116,32 @@ fn try_path_open(ctx: &LsmContext) -> Result<(), i32> {
         }
     }
 
+    // Get file open flags from struct file
+    let f_flags = unsafe { (*file_ptr).f_flags };
+    let access_mode = f_flags & O_ACCMODE;
+
+    // Determine if this is a read or write operation
+    let is_read = access_mode == O_RDONLY || access_mode == O_RDWR;
+    let is_write = access_mode == O_WRONLY || access_mode == O_RDWR;
+
     // Check if this path is in the deny list
     match unsafe { DENY_PATHS.get(&path_buf) } {
-        Some(_mode) => {
-            // Path is denied, block access
-            return Err(-1);
+        Some(denied_mode) => {
+            // Check if the current access mode matches the denied mode
+            let should_deny = match *denied_mode {
+                ACCESS_MODE_READ => is_read,
+                ACCESS_MODE_WRITE => is_write,
+                ACCESS_MODE_READWRITE => is_read || is_write,
+                _ => false,
+            };
+
+            if should_deny {
+                // Access mode matches deny policy, block access
+                return Err(-1);
+            } else {
+                // Access mode doesn't match deny policy, allow access
+                return Ok(());
+            }
         }
         None => {
             // Path not in deny list, allow access
