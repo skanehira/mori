@@ -1,5 +1,5 @@
 use crate::error::MoriError;
-use crate::policy::NetworkPolicy;
+use crate::policy::{FilePolicy, NetworkPolicy, Policy};
 
 use super::args::Args;
 use super::config::ConfigFile;
@@ -9,24 +9,44 @@ pub struct PolicyLoader;
 
 impl PolicyLoader {
     /// Load complete policy from CLI arguments
-    pub fn load(args: &Args) -> Result<NetworkPolicy, MoriError> {
-        let mut policy = NetworkPolicy::from_allow_all(args.allow_network_all);
+    pub fn load(args: &Args) -> Result<Policy, MoriError> {
+        let mut network_policy = NetworkPolicy::from_allow_all(args.allow_network_all);
+        let mut file_policy = FilePolicy::new();
 
         // Load configuration file if specified
         if let Some(config_path) = args.config.as_ref() {
             let config = ConfigFile::load(config_path)?;
-            let config_policy = config.to_policy()?;
-            policy.merge(config_policy);
+            let config_network_policy = config.to_policy()?;
+            network_policy.merge(config_network_policy);
+            // TODO: Load file policy from config file
         }
 
-        // Load policies from CLI arguments (only if not allow-all and on Linux)
+        // Load policies from CLI arguments (only on Linux)
         #[cfg(not(target_os = "macos"))]
-        if !args.allow_network_all {
-            let cli_policy = NetworkPolicy::from_entries(&args.allow_network)?;
-            policy.merge(cli_policy);
+        {
+            // Network policy
+            if !args.allow_network_all {
+                let cli_network_policy = NetworkPolicy::from_entries(&args.allow_network)?;
+                network_policy.merge(cli_network_policy);
+            }
+
+            // File policy (deny-list mode)
+            for path in &args.deny_file {
+                file_policy.deny_read_write(path);
+            }
+            for path in &args.deny_file_read {
+                file_policy.deny_read(path);
+            }
+            for path in &args.deny_file_write {
+                file_policy.deny_write(path);
+            }
         }
 
-        Ok(policy)
+        Ok(Policy {
+            network: network_policy,
+            file: file_policy,
+            ..Default::default()
+        })
     }
 }
 
@@ -41,6 +61,9 @@ mod tests {
             config: None,
             allow_network: vec![],
             allow_network_all: true,
+            deny_file: vec![],
+            deny_file_read: vec![],
+            deny_file_write: vec![],
             command: vec!["echo".to_string(), "test".to_string()],
         };
 
@@ -52,7 +75,7 @@ mod tests {
         };
 
         let policy = PolicyLoader::load(&args).unwrap();
-        assert!(policy.is_allow_all());
+        assert!(policy.network.is_allow_all());
     }
 
     #[test]
@@ -62,6 +85,9 @@ mod tests {
             config: None,
             allow_network: vec![],
             allow_network_all: false,
+            deny_file: vec![],
+            deny_file_read: vec![],
+            deny_file_write: vec![],
             command: vec!["echo".to_string(), "test".to_string()],
         };
 
@@ -73,6 +99,6 @@ mod tests {
         };
 
         let policy = PolicyLoader::load(&args).unwrap();
-        assert!(!policy.is_allow_all());
+        assert!(!policy.network.is_allow_all());
     }
 }

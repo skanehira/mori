@@ -1,7 +1,7 @@
 use clap::Parser;
 use mori::{
     cli::{Args, PolicyLoader},
-    runtime::execute_with_network_control,
+    runtime::execute_with_control,
 };
 
 #[tokio::main]
@@ -15,6 +15,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let policy = PolicyLoader::load(&args)?;
 
-    let exit_code = execute_with_network_control(command, &command_args, &policy).await?;
+    let exit_code = execute_with_control(command, &command_args, &policy).await?;
     std::process::exit(exit_code);
 }

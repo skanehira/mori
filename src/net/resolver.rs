@@ -12,7 +12,7 @@ use mockall::automock;
 use super::cache::Entry;
 use crate::error::MoriError;
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct DomainRecords {
     pub domain: String,
     pub records: Vec<Entry>,

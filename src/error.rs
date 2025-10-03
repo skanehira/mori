@@ -3,7 +3,7 @@ use thiserror::Error;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-use aya::{EbpfError, maps::MapError, programs::ProgramError};
+use aya::{BtfError, EbpfError, maps::MapError, programs::ProgramError};
 use hickory_resolver::ResolveError;
 
 #[cfg(target_os = "linux")]
@@ -47,6 +47,9 @@ pub enum MoriError {
 
     #[error("eBPF map error: {0}")]
     Map(#[from] MapError),
+
+    #[error("BTF error: {0}")]
+    Btf(#[from] BtfError),
 
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },

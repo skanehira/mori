@@ -11,7 +11,7 @@ use mockall::automock;
 
 use crate::error::MoriError;
 
-const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
+pub const EBPF_ELF: &[u8] = include_bytes_aligned!(env!("MORI_BPF_ELF"));
 const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
 
 /// eBPF controller abstraction for testing
