@@ -11,7 +11,11 @@ impl PolicyLoader {
     /// Load complete policy from CLI arguments
     pub fn load(args: &Args) -> Result<Policy, MoriError> {
         let mut network_policy = NetworkPolicy::from_allow_all(args.allow_network_all);
+
+        #[cfg(target_os = "macos")]
         let file_policy = FilePolicy::new();
+        #[cfg(target_os = "linux")]
+        let mut file_policy = FilePolicy::new();
 
         // Load configuration file if specified
         if let Some(config_path) = args.config.as_ref() {
@@ -22,7 +26,7 @@ impl PolicyLoader {
         }
 
         // Load policies from CLI arguments (only on Linux)
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         {
             // Network policy
             if !args.allow_network_all {
