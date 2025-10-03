@@ -27,6 +27,36 @@ use dns::{apply_dns_servers, apply_domain_records, spawn_refresh};
 use ebpf::NetworkEbpf;
 use sync::ShutdownSignal;
 
+/// Spawn a command with optional privilege dropping
+///
+/// If running under sudo (SUDO_UID and SUDO_GID are set), this function
+/// drops privileges for the child process to the original user's UID/GID.
+fn spawn_command(command: &str, args: &[&str]) -> Result<std::process::Child, MoriError> {
+    // Get the real user ID (the user who invoked sudo)
+    // SUDO_UID and SUDO_GID are set by sudo to the original user's UID/GID
+    let sudo_uid = std::env::var("SUDO_UID").ok().and_then(|s| s.parse().ok());
+    let sudo_gid = std::env::var("SUDO_GID").ok().and_then(|s| s.parse().ok());
+
+    let mut cmd = Command::new(command);
+    cmd.args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    // If running under sudo, drop privileges for the child process
+    if let (Some(uid), Some(gid)) = (sudo_uid, sudo_gid) {
+        use std::os::unix::process::CommandExt;
+        cmd.uid(uid).gid(gid);
+        log::info!(
+            "Dropping privileges for child process to UID={}, GID={}",
+            uid,
+            gid
+        );
+    }
+
+    cmd.spawn().map_err(MoriError::Io)
+}
+
 /// Execute a command in a controlled cgroup with network and file access restrictions
 pub async fn execute_with_control(
     command: &str,
@@ -35,12 +65,7 @@ pub async fn execute_with_control(
 ) -> Result<i32, MoriError> {
     // If network policy is allow-all and no file deny policy, run without restrictions
     if matches!(policy.network.policy, AllowPolicy::All) && policy.file.denied_paths.is_empty() {
-        let mut child = Command::new(command)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+        let mut child = spawn_command(command, args)?;
         let status = child.wait()?;
         return Ok(status.code().unwrap_or(-1));
     }
@@ -98,13 +123,8 @@ pub async fn execute_with_control(
         file::FileEbpf::load_and_attach(&mut bpf, &policy.file, cgroup.fd())?;
     }
 
-    // Spawn the command as a child process (automatically inherits cgroup)
-    let mut child = Command::new(command)
-        .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()?;
+    // Spawn the command as a child process with privilege dropping if needed
+    let mut child = spawn_command(command, args)?;
 
     // Add the child process to our cgroup
     cgroup.add_process(child.id())?;
