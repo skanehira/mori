@@ -11,7 +11,7 @@ impl PolicyLoader {
     /// Load complete policy from CLI arguments
     pub fn load(args: &Args) -> Result<Policy, MoriError> {
         let mut network_policy = NetworkPolicy::from_allow_all(args.allow_network_all);
-        let mut file_policy = FilePolicy::new();
+        let file_policy = FilePolicy::new();
 
         // Load configuration file if specified
         if let Some(config_path) = args.config.as_ref() {
