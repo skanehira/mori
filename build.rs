@@ -45,6 +45,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         unsafe { env::remove_var("CARGO_ENCODED_RUSTFLAGS") };
     }
 
+    // Suppress warnings from generated vmlinux.rs during eBPF compilation
+    unsafe {
+        env::set_var(
+            "RUSTFLAGS",
+            "-A warnings -A clippy::all -A unsafe_op_in_unsafe_fn -A unnecessary_transmutes",
+        );
+    }
+
     let build_result = aya_build::build_ebpf([package]);
 
     if let Some(value) = saved_rustflags {
