@@ -5,7 +5,9 @@
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
 #[allow(dead_code)]
-mod vmlinux;
+mod vmlinux {
+    include!(concat!(env!("OUT_DIR"), "/vmlinux.rs"));
+}
 
 use aya_ebpf::{
     helpers::{bpf_d_path, bpf_get_current_cgroup_id},

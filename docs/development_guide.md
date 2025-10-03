@@ -72,20 +72,12 @@ cargo install aya-tool
 ```
 
 `vmlinux.rs` contains Rust bindings for kernel types and is used by eBPF programs
-to safely access kernel structures. This file is generated from the running kernel's
-BTF information.
+to safely access kernel structures. This file is **automatically generated** during
+the build process from the running kernel's BTF information (`/sys/kernel/btf/vmlinux`).
 
-To regenerate `vmlinux.rs`:
-```bash
-# Generate vmlinux.rs from current kernel
-aya-tool generate vmlinux > mori-bpf/src/vmlinux.rs
-```
-
-**Note**: The generated `vmlinux.rs` is kernel-version specific. The project includes
-a pre-generated version for convenience, but you may need to regenerate it if:
-- You're developing on a different kernel version
-- You need to access new kernel types
-- Compilation fails with BTF-related errors
+**Note**: The generated `vmlinux.rs` is kernel-version specific and is created in
+the build output directory (`OUT_DIR`). You don't need to manually generate it -
+the `mori-bpf/build.rs` script handles this automatically using `aya-tool`.
 
 #### BPF Development Tools (Ubuntu/Debian)
 
@@ -231,33 +223,40 @@ eBPF programs are in the `mori-bpf/` workspace member:
 ```
 mori-bpf/
 ├── src/
-│   ├── main.rs       # eBPF programs (network, file control)
-│   └── vmlinux.rs    # Kernel type bindings (auto-generated)
+│   └── main.rs       # eBPF programs (network, file control)
 ├── Cargo.toml
-└── build.rs
+└── build.rs          # Generates vmlinux.rs automatically
 ```
 
 #### vmlinux.rs - Kernel Type Bindings
 
-`vmlinux.rs` is automatically generated from the running kernel's BTF (BPF Type Format)
-information and provides type-safe access to kernel structures.
+`vmlinux.rs` is **automatically generated** by `mori-bpf/build.rs` during the build
+process from the running kernel's BTF (BPF Type Format) information.
 
-**When to regenerate:**
-- Working on a different kernel version
-- Need access to new kernel types (e.g., new LSM hook arguments)
-- Getting BTF-related compilation errors
+**Build-time generation:**
+- The `build.rs` script calls `aya-tool generate file path` to create kernel type bindings
+- Generated types are written to `OUT_DIR/vmlinux.rs`
+- The eBPF code includes it using `include!(concat!(env!("OUT_DIR"), "/vmlinux.rs"))`
+- This ensures bindings always match your current kernel
 
-**How to regenerate:**
+**Required types:**
+Currently, the build script generates bindings for:
+- `file`: For file access control LSM hooks
+- `path`: For file path operations
+
+**Adding new types:**
+If you need additional kernel types, update `mori-bpf/build.rs`:
 ```bash
-# Install aya-tool if not already installed
-cargo install aya-tool
-
-# Generate vmlinux.rs from current kernel's BTF
-aya-tool generate vmlinux > mori-bpf/src/vmlinux.rs
+# Add new type to the generate command
+.args(["generate", "file", "path", "your_new_type"])
 ```
 
 **Usage in eBPF code:**
 ```rust
+mod vmlinux {
+    include!(concat!(env!("OUT_DIR"), "/vmlinux.rs"));
+}
+
 use vmlinux::{file, path};
 
 // Access kernel structures with type safety
@@ -392,9 +391,9 @@ mori/
 │   └── error.rs                # Error types
 ├── mori-bpf/                   # eBPF programs (separate workspace)
 │   ├── src/
-│   │   ├── main.rs            # eBPF hooks
-│   │   └── vmlinux.rs         # Kernel types
-│   └── Cargo.toml
+│   │   └── main.rs            # eBPF hooks
+│   ├── Cargo.toml
+│   └── build.rs               # Auto-generates vmlinux.rs
 ├── docs/                       # Documentation
 ├── tests/                      # Integration tests
 └── Cargo.toml                  # Workspace manifest
