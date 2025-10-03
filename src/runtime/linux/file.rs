@@ -1,9 +1,9 @@
 use std::{convert::TryFrom, os::fd::BorrowedFd};
 
 use aya::{
+    Btf, Ebpf,
     maps::HashMap,
     programs::lsm::{Lsm, LsmLinkId},
-    Btf, Ebpf,
 };
 
 use crate::{
@@ -59,28 +59,19 @@ impl FileEbpf {
                 key[path_bytes.len()] = 0;
             }
 
-            // Log all 15 bytes of the key for debugging
-            let hex_key: String = key
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(" ");
-
             let mode_value = *mode as u8;
             deny_paths
                 .insert(key, mode_value, 0)
                 .map_err(MoriError::Map)?;
 
             log::info!(
-                "Denied file access: {} (len={}, mode: {}, key_hex: {})",
+                "Denied file access: {} (mode: {})",
                 path_str,
-                path_bytes.len(),
                 match mode {
                     AccessMode::Read => "READ",
                     AccessMode::Write => "WRITE",
                     AccessMode::ReadWrite => "READ|WRITE",
                 },
-                hex_key
             );
         }
 
