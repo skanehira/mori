@@ -35,11 +35,11 @@ pub fn apply_domain_records<E: EbpfController>(
     for diff in diffs {
         for ip in diff.removed {
             ebpf_guard.remove_ipv4(ip)?;
-            println!("Resolved domain IPv4 {} removed from allow list", ip);
+            log::info!("Resolved domain IPv4 {} removed from allow list", ip);
         }
         for ip in diff.added {
             ebpf_guard.allow_ipv4(ip)?;
-            println!("Resolved domain IPv4 {} added to allow list", ip);
+            log::info!("Resolved domain IPv4 {} added to allow list", ip);
         }
     }
 
@@ -57,7 +57,7 @@ pub fn apply_dns_servers<E: EbpfController>(
     for ip in ips {
         if set.insert(ip) {
             ebpf_guard.allow_ipv4(ip)?;
-            println!("Nameserver IPv4 {} added to allow list", ip);
+            log::info!("Nameserver IPv4 {} added to allow list", ip);
         }
     }
 
@@ -99,15 +99,15 @@ pub fn spawn_refresh<R: DnsResolver, E: EbpfController>(
                     let now = Instant::now();
                     let _ = apply_domain_records(&dns_cache, &ebpf, now, resolved.domains)
                         .inspect_err(|err| {
-                            eprintln!("Failed to apply domain records: {err}");
+                            log::error!("Failed to apply domain records: {err}");
                         });
                     let _ = apply_dns_servers(&ebpf, &allowed_dns_ips, resolved.dns_v4)
                         .inspect_err(|err| {
-                            eprintln!("Failed to apply DNS servers: {err}");
+                            log::error!("Failed to apply DNS servers: {err}");
                         });
                 }
                 Err(err) => {
-                    eprintln!("Failed to refresh DNS records: {err}");
+                    log::error!("Failed to refresh DNS records: {err}");
                 }
             }
         }
