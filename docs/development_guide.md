@@ -14,30 +14,20 @@ This guide provides instructions for setting up a development environment and co
   - cgroup v2 enabled
 
 Verify kernel support:
+
 ```bash
 # Check kernel version
 uname -r
 
 # Check if BPF LSM is enabled
-grep CONFIG_BPF_LSM /boot/config-$(uname -r)
+$ zcat /proc/config.gz | grep CONFIG_BPF_LSM
+CONFIG_BPF_LSM=y
 
 # Check if BPF is in LSM list
 cat /sys/kernel/security/lsm
 ```
 
 ### Required Tools
-
-#### Rust Toolchain
-
-mori uses Rust 2024 edition with a fixed toolchain version.
-
-```bash
-# Install rustup if not already installed
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# The project uses rust-toolchain.toml, so the correct version
-# will be automatically installed when you build
-```
 
 #### Nightly Toolchain for eBPF (Linux only)
 
@@ -68,7 +58,8 @@ cargo install bpf-linker
 Required for generating `vmlinux.rs` from kernel BTF (BPF Type Format):
 
 ```bash
-cargo install aya-tool
+cargo install bpf-linker bindgen-cli
+cargo install --git https://github.com/aya-rs/aya -- aya-tool
 ```
 
 `vmlinux.rs` contains Rust bindings for kernel types and is used by eBPF programs
@@ -91,27 +82,7 @@ sudo apt-get install -y \
     llvm
 ```
 
-#### Optional: Testing Tools
-
-```bash
-# cargo-nextest for fast test execution
-cargo install cargo-nextest
-
-# cargo-llvm-cov for code coverage
-cargo install cargo-llvm-cov
-```
-
 ## Building
-
-### Standard Build
-
-```bash
-# Debug build
-cargo build
-
-# Release build
-cargo build --release
-```
 
 The build process automatically:
 1. Compiles eBPF programs in `mori-bpf/` using the nightly toolchain
@@ -123,95 +94,26 @@ The build process automatically:
 - Userspace binary: `target/release/mori`
 - eBPF ELF (intermediate): `target/bpfel-unknown-none/release/mori-bpf`
 
-### Build Troubleshooting
-
-#### Error: "bpf-linker not found"
-
-```bash
-cargo install bpf-linker
-```
-
-#### Error: "can't find crate for `core`"
-
-```bash
-rustup toolchain install nightly --component rust-src
-```
-
-#### Error: "failed to run custom build command"
-
-Check that you have the required BPF development tools:
-```bash
-sudo apt-get install libbpf-dev linux-tools-$(uname -r)
-```
-
 ## Testing
+
+Install cargo-nextest
+
+```bash
+cargo install cargo-nextest --locked
+```
 
 ### Run All Tests
 
 ```bash
-# Standard test runner
-cargo test
-
-# Faster test execution with nextest (recommended)
-cargo nextest run
-```
-
-### Run Specific Tests
-
-```bash
-# Test a specific module
-cargo test policy
-
-# Test a specific function
-cargo test test_policy_loader
-```
-
-### Integration Tests (Requires root)
-
-Some tests require root privileges to load eBPF programs:
-
-```bash
-sudo -E cargo test --test integration_tests
+# test runner
+make test
 ```
 
 ### Code Coverage
 
 ```bash
 # Generate coverage report
-cargo llvm-cov nextest --lcov --output-path lcov.info
-
-# View HTML report
-cargo llvm-cov nextest --html
-open target/llvm-cov/html/index.html
-```
-
-## Code Quality
-
-### Formatting
-
-```bash
-# Check formatting
-cargo fmt -- --check
-
-# Apply formatting
-cargo fmt
-```
-
-### Linting
-
-```bash
-# Run Clippy
-cargo clippy
-
-# Run Clippy with all features
-cargo clippy --all-features
-```
-
-### Pre-commit Checks
-
-Before committing, ensure:
-```bash
-cargo fmt -- --check && cargo clippy && cargo build && cargo test
+make test-cov
 ```
 
 ## eBPF Development
@@ -342,7 +244,7 @@ sudo ./target/release/mori --deny-file-read /etc/shadow -- cat /etc/shadow
 sudo ./target/release/mori --deny-file-write /tmp/test.txt -- touch /tmp/test.txt
 
 # Deny both read and write
-sudo ./target/release/mori --deny-file-readwrite /etc/hosts -- cat /etc/hosts
+sudo ./target/release/mori --deny-file /etc/hosts -- cat /etc/hosts
 ```
 
 ### Using Config File
@@ -361,65 +263,6 @@ EOF
 sudo ./target/release/mori --config config.toml -- bash
 ```
 
-## Project Structure
-
-```
-mori/
-├── src/
-│   ├── main.rs                 # Entry point
-│   ├── cli/                    # CLI argument parsing
-│   │   ├── args.rs            # clap definitions
-│   │   ├── config.rs          # TOML config parsing
-│   │   └── loader.rs          # Policy loading
-│   ├── policy/                 # Policy models
-│   │   ├── mod.rs
-│   │   ├── net.rs             # Network policy
-│   │   └── file.rs            # File policy
-│   ├── net/                    # Network utilities
-│   │   ├── resolver.rs        # DNS resolution
-│   │   ├── cache.rs           # DNS cache
-│   │   └── parser.rs          # Target parsing
-│   ├── runtime/                # Execution runtime
-│   │   ├── mod.rs
-│   │   └── linux/             # Linux-specific implementation
-│   │       ├── mod.rs         # Main execution logic
-│   │       ├── ebpf.rs        # Network eBPF loader
-│   │       ├── file.rs        # File eBPF loader
-│   │       ├── cgroup.rs      # cgroup management
-│   │       ├── dns.rs         # DNS refresh task
-│   │       └── sync.rs        # Shutdown coordination
-│   └── error.rs                # Error types
-├── mori-bpf/                   # eBPF programs (separate workspace)
-│   ├── src/
-│   │   └── main.rs            # eBPF hooks
-│   ├── Cargo.toml
-│   └── build.rs               # Auto-generates vmlinux.rs
-├── docs/                       # Documentation
-├── tests/                      # Integration tests
-└── Cargo.toml                  # Workspace manifest
-```
-
-## Contributing
-
-### Workflow
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make changes following the coding standards
-4. Run tests: `cargo nextest run`
-5. Run quality checks: `cargo fmt && cargo clippy`
-7. Push and create a pull request
-
-### Coding Standards
-
-- Follow Rust API Guidelines
-- Use meaningful variable and function names
-- Add documentation comments for public APIs
-- Keep functions small and focused
-- Prefer explicit error handling over unwrap/expect
-- Use `Result` for fallible operations
-- Avoid type casts (`as`) when possible
-
 ## Resources
 
 ### eBPF Learning Resources
@@ -434,17 +277,11 @@ mori/
 - [cgroup v2 Documentation](https://www.kernel.org/doc/Documentation/cgroup-v2.txt)
 - [Linux Security Modules](https://www.kernel.org/doc/html/latest/security/lsm.html)
 
-### Rust Resources
-
-- [Rust Book](https://doc.rust-lang.org/book/)
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- [Cargo Book](https://doc.rust-lang.org/cargo/)
-
 ## Troubleshooting
 
 ### Permission Denied Errors
 
-mori requires root privileges to:
+On Linux, mori requires root privileges to:
 - Load eBPF programs (CAP_BPF, CAP_SYS_ADMIN)
 - Create and manage cgroups (CAP_SYS_ADMIN)
 - Attach LSM hooks (CAP_BPF, CAP_NET_ADMIN)
@@ -465,19 +302,6 @@ mount | grep cgroup2
 sudo mount -t cgroup2 none /sys/fs/cgroup
 ```
 
-### eBPF Program Load Failures
-
-Check kernel configuration:
-```bash
-# Verify BPF LSM is enabled
-cat /proc/config.gz | gunzip | grep CONFIG_BPF_LSM
-
-# Or check boot config
-grep CONFIG_BPF_LSM /boot/config-$(uname -r)
-```
-
-If `CONFIG_BPF_LSM=n`, you need to recompile the kernel with LSM support.
-
 ## License
 
-mori is licensed under the MIT License. See [LICENSE](../LICENSE) for details.
+mori is dual-licensed under the MIT License and GPL-2.0 License. See [LICENSE-MIT](../LICENSE-MIT) and [LICENSE-GPL](../LICENSE-GPL) for details.
