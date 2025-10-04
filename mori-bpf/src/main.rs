@@ -15,6 +15,7 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray},
     programs::{LsmContext, SockAddrContext},
 };
+use aya_log_ebpf::info;
 use vmlinux::{file, path};
 
 const ALLOW: i32 = 1;
@@ -57,9 +58,24 @@ static PATH_SCRATCH: PerCpuArray<[u8; PATH_MAX]> = PerCpuArray::with_max_entries
 #[cgroup_sock_addr(connect4)]
 pub fn mori_connect4(ctx: SockAddrContext) -> i32 {
     let addr = unsafe { (*ctx.sock_addr).user_ip4 };
+
+    let ip_bytes = addr.to_le_bytes();
+
     match unsafe { ALLOW_V4.get(&addr) } {
-        Some(_) => ALLOW,
-        None => DENY,
+        Some(_) => {
+            info!(
+                &ctx,
+                "connect: {}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+            );
+            ALLOW
+        }
+        None => {
+            info!(
+                &ctx,
+                "deny: {}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+            );
+            DENY
+        }
     }
 }
 
