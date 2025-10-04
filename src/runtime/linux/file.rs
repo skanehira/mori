@@ -1,9 +1,9 @@
 use std::{convert::TryFrom, os::fd::BorrowedFd};
 
 use aya::{
+    Btf, Ebpf,
     maps::HashMap,
     programs::lsm::{Lsm, LsmLinkId},
-    Btf, Ebpf,
 };
 
 use crate::{

@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs::{self, File},
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
     process,
@@ -10,8 +9,8 @@ use crate::error::MoriError;
 
 /// Cgroup manager that creates and manages a cgroup for process isolation
 pub struct CgroupManager {
-    cgroup_path: PathBuf,
-    cgroup_file: File,
+    pub path: PathBuf,
+    file: File,
 }
 
 impl CgroupManager {
@@ -22,31 +21,33 @@ impl CgroupManager {
         let cgroup_path = PathBuf::from("/sys/fs/cgroup").join(cgroup_name);
 
         fs::create_dir_all(&cgroup_path)?;
+
+        // Change ownership to SUDO_UID/SUDO_GID if running under sudo
+        // This allows the child process to write to cgroup.procs after dropping privileges
+        if let (Ok(uid_str), Ok(gid_str)) = (std::env::var("SUDO_UID"), std::env::var("SUDO_GID"))
+            && let (Ok(uid), Ok(gid)) = (uid_str.parse::<u32>(), gid_str.parse::<u32>())
+        {
+            use std::os::unix::fs::chown;
+            chown(&cgroup_path, Some(uid), Some(gid))?;
+        }
+
         let cgroup_file = File::open(&cgroup_path)?;
 
         Ok(Self {
-            cgroup_path,
-            cgroup_file,
+            path: cgroup_path,
+            file: cgroup_file,
         })
     }
 
     /// Get a borrowed file descriptor for the cgroup
     pub fn fd(&self) -> BorrowedFd<'_> {
-        unsafe { BorrowedFd::borrow_raw(self.cgroup_file.as_raw_fd()) }
-    }
-
-    /// Add a process to this cgroup
-    pub fn add_process(&self, pid: u32) -> Result<(), MoriError> {
-        let procs_path = self.cgroup_path.join("cgroup.procs");
-        let mut file = OpenOptions::new().write(true).open(procs_path)?;
-        write!(file, "{}", pid)?;
-        Ok(())
+        unsafe { BorrowedFd::borrow_raw(self.file.as_raw_fd()) }
     }
 }
 
 impl Drop for CgroupManager {
     fn drop(&mut self) {
         // Clean up the cgroup directory when dropped
-        let _ = fs::remove_dir(&self.cgroup_path);
+        let _ = fs::remove_dir(&self.path);
     }
 }

@@ -6,7 +6,6 @@ mod sync;
 
 use std::{
     collections::HashSet,
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -27,34 +26,102 @@ use dns::{apply_dns_servers, apply_domain_records, spawn_refresh};
 use ebpf::NetworkEbpf;
 use sync::ShutdownSignal;
 
-/// Spawn a command with optional privilege dropping
+/// Spawn a command and add it to a cgroup before execution
 ///
-/// If running under sudo (SUDO_UID and SUDO_GID are set), this function
-/// drops privileges for the child process to the original user's UID/GID.
-fn spawn_command(command: &str, args: &[&str]) -> Result<std::process::Child, MoriError> {
-    // Get the real user ID (the user who invoked sudo)
-    // SUDO_UID and SUDO_GID are set by sudo to the original user's UID/GID
-    let sudo_uid = std::env::var("SUDO_UID").ok().and_then(|s| s.parse().ok());
-    let sudo_gid = std::env::var("SUDO_GID").ok().and_then(|s| s.parse().ok());
+/// Uses fork() to get the PID before exec, allowing us to add the process
+/// to the cgroup before it starts executing the command.
+/// Returns a ChildProcess that can be waited on.
+fn spawn_command(
+    command: &str,
+    args: &[&str],
+    cgroup_path: &std::path::Path,
+) -> Result<ChildProcess, MoriError> {
+    use nix::unistd::{ForkResult, fork};
 
-    let mut cmd = Command::new(command);
-    cmd.args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+    // Create a pipe for synchronization using libc
+    let mut pipe_fds = [0i32; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
+        return Err(MoriError::Io(std::io::Error::last_os_error()));
+    }
+    let read_fd = pipe_fds[0];
+    let write_fd = pipe_fds[1];
 
-    // If running under sudo, drop privileges for the child process
-    if let (Some(uid), Some(gid)) = (sudo_uid, sudo_gid) {
-        use std::os::unix::process::CommandExt;
-        cmd.uid(uid).gid(gid);
-        log::info!(
-            "Dropping privileges for child process to UID={}, GID={}",
-            uid,
-            gid
-        );
+    // Fork the process
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            // Parent process: close read end
+            unsafe { libc::close(read_fd) };
+
+            // Add child to cgroup
+            let pid = child.as_raw() as u32;
+            let procs_path = cgroup_path.join("cgroup.procs");
+            std::fs::write(&procs_path, pid.to_string())?;
+            log::info!("Added process {} to cgroup", pid);
+
+            // Signal child to continue by closing write end
+            unsafe { libc::close(write_fd) };
+
+            Ok(ChildProcess { pid: child })
+        }
+        Ok(ForkResult::Child) => {
+            use std::os::unix::process::CommandExt;
+            use std::process::Command;
+
+            // Child process: close write end
+            unsafe { libc::close(write_fd) };
+
+            // Wait for parent to add us to cgroup (blocks until parent closes write_fd)
+            let mut buf = [0u8; 1];
+            unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, 1) };
+
+            // Close read end
+            unsafe { libc::close(read_fd) };
+
+            // Build command
+            let mut cmd = Command::new(command);
+            cmd.args(args);
+
+            // Drop privileges if running under sudo
+            if let (Ok(uid_str), Ok(gid_str)) =
+                (std::env::var("SUDO_UID"), std::env::var("SUDO_GID"))
+                && let (Ok(uid), Ok(gid)) = (uid_str.parse::<u32>(), gid_str.parse::<u32>())
+            {
+                cmd.uid(uid).gid(gid);
+            }
+
+            // exec the command (this replaces the current process image and never returns)
+            let err = cmd.exec();
+
+            // If we reach here, exec failed
+            panic!("exec failed: {}", err);
+        }
+        Err(e) => Err(MoriError::Io(std::io::Error::from(e))),
+    }
+}
+
+/// Wrapper for a child process that provides wait() functionality
+struct ChildProcess {
+    pid: nix::unistd::Pid,
+}
+
+impl ChildProcess {
+    fn id(&self) -> u32 {
+        self.pid.as_raw() as u32
     }
 
-    cmd.spawn().map_err(MoriError::Io)
+    fn wait(&mut self) -> Result<std::process::ExitStatus, MoriError> {
+        use nix::sys::wait::{WaitStatus, waitpid};
+        use std::os::unix::process::ExitStatusExt;
+
+        match waitpid(self.pid, None) {
+            Ok(WaitStatus::Exited(_, code)) => Ok(std::process::ExitStatus::from_raw(code << 8)),
+            Ok(WaitStatus::Signaled(_, signal, _)) => {
+                Ok(std::process::ExitStatus::from_raw(signal as i32))
+            }
+            Ok(_) => Ok(std::process::ExitStatus::from_raw(0)),
+            Err(e) => Err(MoriError::Io(std::io::Error::from(e))),
+        }
+    }
 }
 
 /// Execute a command in a controlled cgroup with network and file access restrictions
@@ -63,9 +130,12 @@ pub async fn execute_with_control(
     args: &[&str],
     policy: &Policy,
 ) -> Result<i32, MoriError> {
+    let cgroup = CgroupManager::create()?;
+
     // If network policy is allow-all and no file deny policy, run without restrictions
+    // Still create a cgroup for consistency (no performance impact)
     if matches!(policy.network.policy, AllowPolicy::All) && policy.file.denied_paths.is_empty() {
-        let mut child = spawn_command(command, args)?;
+        let mut child = spawn_command(command, args, &cgroup.path)?;
         let status = child.wait()?;
         return Ok(status.code().unwrap_or(-1));
     }
@@ -81,9 +151,6 @@ pub async fn execute_with_control(
 
     let resolver = SystemDnsResolver;
     let resolved = resolver.resolve_domains(&domain_names).await?;
-
-    // Create and setup cgroup
-    let cgroup = CgroupManager::create()?;
 
     // Load eBPF programs
     let mut bpf = Ebpf::load(ebpf::EBPF_ELF)?;
@@ -124,14 +191,11 @@ pub async fn execute_with_control(
     }
 
     // Spawn the command as a child process with privilege dropping if needed
-    let mut child = spawn_command(command, args)?;
-
-    // Add the child process to our cgroup
-    cgroup.add_process(child.id())?;
-    println!("Process {} added to cgroup", child.id());
+    // The process is added to the cgroup before exec via pre_exec hook
+    let mut child = spawn_command(command, args, &cgroup.path)?;
 
     log::info!(
-        "Spawned child process {} (automatically in cgroup)",
+        "Spawned child process {} (added to cgroup via pre-exec)",
         child.id()
     );
 
