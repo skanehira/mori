@@ -1,7 +1,7 @@
 use crate::policy::{AccessMode, Policy};
 use tokio::process::Command;
 
-pub async fn execute_with_control(
+pub async fn execute_with_policy(
     command: &str,
     args: &[&str],
     policy: &Policy,
@@ -45,20 +45,14 @@ fn create_sandbox_profile(policy: &Policy) -> String {
         r#"(version 1)
 (import "system.sb")
 (deny default)
+(allow file-read*
+    (subpath "/opt/local/lib")
+    (subpath "/usr/lib")
+    (subpath "/usr/local/lib")
+)
+(allow file*)
 "#,
     );
-
-    // Allow reading system libraries for process execution
-    profile.push_str(
-        r#"(allow file-read*
-(subpath "/opt/local/lib")
-(subpath "/usr/lib")
-(subpath "/usr/local/lib")
-)"#,
-    );
-
-    // Allow all file operations by default (deny-list mode)
-    profile.push_str("(allow file*)\n");
 
     // Add file access denials using (deny file-*) rules
     for (path, mode) in &policy.file.denied_paths {

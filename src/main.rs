@@ -1,11 +1,12 @@
 use clap::Parser;
 use mori::{
     cli::{Args, PolicyLoader},
-    runtime::execute_with_control,
+    error::MoriError,
+    runtime::execute_with_policy,
 };
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), MoriError> {
     env_logger::init();
 
     let args = Args::parse();
@@ -15,6 +16,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let policy = PolicyLoader::load(&args)?;
 
-    let exit_code = execute_with_control(command, &command_args, &policy).await?;
+    let exit_code = execute_with_policy(command, &command_args, &policy).await?;
     std::process::exit(exit_code);
 }

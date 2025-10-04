@@ -125,7 +125,7 @@ impl ChildProcess {
 }
 
 /// Execute a command in a controlled cgroup with network and file access restrictions
-pub async fn execute_with_control(
+pub async fn execute_with_policy(
     command: &str,
     args: &[&str],
     policy: &Policy,
