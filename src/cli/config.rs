@@ -11,6 +11,8 @@ use crate::{error::MoriError, policy::NetworkPolicy};
 pub struct ConfigFile {
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub file: FileConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -39,6 +41,19 @@ impl Default for AllowConfig {
     fn default() -> Self {
         AllowConfig::Boolean(false)
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct FileConfig {
+    /// Deny file read/write access to the specified paths
+    #[serde(default)]
+    pub deny: Vec<PathBuf>,
+    /// Deny file read access to the specified paths
+    #[serde(default)]
+    pub deny_read: Vec<PathBuf>,
+    /// Deny file write access to the specified paths
+    #[serde(default)]
+    pub deny_write: Vec<PathBuf>,
 }
 
 impl ConfigFile {
@@ -110,5 +125,36 @@ mod tests {
         let config = ConfigFile::load(tmp.path()).unwrap();
         let policy = config.to_policy().unwrap();
         assert!(!policy.is_allow_all());
+    }
+
+    #[test]
+    fn load_file_config_deny_paths() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            r#"
+[file]
+deny = ["/tmp/secret", "/etc/passwd"]
+deny_read = ["/home/user/.ssh"]
+deny_write = ["/var/log"]
+"#
+        )
+        .unwrap();
+
+        let config = ConfigFile::load(tmp.path()).unwrap();
+        assert_eq!(config.file.deny.len(), 2);
+        assert_eq!(config.file.deny_read.len(), 1);
+        assert_eq!(config.file.deny_write.len(), 1);
+    }
+
+    #[test]
+    fn load_empty_file_config() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "[network]\nallow = true\n").unwrap();
+
+        let config = ConfigFile::load(tmp.path()).unwrap();
+        assert_eq!(config.file.deny.len(), 0);
+        assert_eq!(config.file.deny_read.len(), 0);
+        assert_eq!(config.file.deny_write.len(), 0);
     }
 }
