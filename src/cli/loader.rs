@@ -55,21 +55,14 @@ mod tests {
 
     #[test]
     fn load_creates_allow_all_policy() {
-        #[cfg(not(target_os = "macos"))]
         let args = Args {
             config: None,
+            #[cfg(not(target_os = "macos"))]
             allow_network: vec![],
             allow_network_all: true,
             deny_file: vec![],
             deny_file_read: vec![],
             deny_file_write: vec![],
-            command: vec!["echo".to_string(), "test".to_string()],
-        };
-
-        #[cfg(target_os = "macos")]
-        let args = Args {
-            config: None,
-            allow_network_all: true,
             command: vec!["echo".to_string(), "test".to_string()],
         };
 
@@ -79,21 +72,14 @@ mod tests {
 
     #[test]
     fn load_creates_deny_all_policy() {
-        #[cfg(not(target_os = "macos"))]
         let args = Args {
             config: None,
+            #[cfg(not(target_os = "macos"))]
             allow_network: vec![],
             allow_network_all: false,
             deny_file: vec![],
             deny_file_read: vec![],
             deny_file_write: vec![],
-            command: vec!["echo".to_string(), "test".to_string()],
-        };
-
-        #[cfg(target_os = "macos")]
-        let args = Args {
-            config: None,
-            allow_network_all: false,
             command: vec!["echo".to_string(), "test".to_string()],
         };
 
