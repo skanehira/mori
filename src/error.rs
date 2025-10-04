@@ -3,7 +3,7 @@ use thiserror::Error;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-use aya::{BtfError, EbpfError, maps::MapError, programs::ProgramError};
+use aya::{maps::MapError, programs::ProgramError, BtfError, EbpfError};
 use hickory_resolver::ResolveError;
 
 #[cfg(target_os = "linux")]
@@ -60,6 +60,9 @@ pub enum MoriError {
         #[source]
         source: toml::de::Error,
     },
+
+    #[error("file path too long (>= {max_len} bytes): {path}")]
+    PathTooLong { path: String, max_len: usize },
 }
 
 #[cfg(target_os = "macos")]

@@ -1,9 +1,9 @@
 use std::{convert::TryFrom, os::fd::BorrowedFd};
 
 use aya::{
-    Btf, Ebpf,
     maps::HashMap,
     programs::lsm::{Lsm, LsmLinkId},
+    Btf, Ebpf,
 };
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     policy::{AccessMode, FilePolicy},
 };
 
-const PATH_MAX: usize = 64;
+const PATH_MAX: usize = 512;
 const PROGRAM_NAMES: &[&str] = &["mori_path_open"];
 
 /// File access control using eBPF LSM
@@ -47,8 +47,10 @@ impl FileEbpf {
             let path_bytes = path_str.as_bytes();
 
             if path_bytes.len() >= PATH_MAX {
-                log::warn!("Path too long (>= 256 bytes), skipping: {}", path_str);
-                continue;
+                return Err(MoriError::PathTooLong {
+                    path: path_str.to_string(),
+                    max_len: PATH_MAX,
+                });
             }
 
             let mut key = [0u8; PATH_MAX];

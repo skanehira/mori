@@ -12,7 +12,7 @@ mod vmlinux {
 use aya_ebpf::{
     helpers::{bpf_d_path, bpf_get_current_cgroup_id},
     macros::{cgroup_sock_addr, lsm, map},
-    maps::HashMap,
+    maps::{HashMap, PerCpuArray},
     programs::{LsmContext, SockAddrContext},
 };
 use vmlinux::{file, path};
@@ -20,7 +20,7 @@ use vmlinux::{file, path};
 const ALLOW: i32 = 1;
 const DENY: i32 = 0;
 
-const PATH_MAX: usize = 64;
+const PATH_MAX: usize = 512;
 
 // Access mode flags (matching userspace AccessMode enum)
 const ACCESS_MODE_READ: u8 = 1;
@@ -48,6 +48,11 @@ static TARGET_CGROUP: HashMap<u64, u8> = HashMap::with_max_entries(1, 0);
 // Deny list for file paths; value is access mode (1=READ, 2=WRITE, 3=READ|WRITE)
 #[map]
 static DENY_PATHS: HashMap<[u8; PATH_MAX], u8> = HashMap::with_max_entries(1024, 0);
+
+// Scratch buffer for path resolution. Using a per-CPU array avoids allocating
+// large buffers on the BPF stack (limited to 512 bytes).
+#[map]
+static PATH_SCRATCH: PerCpuArray<[u8; PATH_MAX]> = PerCpuArray::with_max_entries(1, 0);
 
 #[cgroup_sock_addr(connect4)]
 pub fn mori_connect4(ctx: SockAddrContext) -> i32 {
@@ -88,8 +93,12 @@ fn try_path_open(ctx: &LsmContext) -> Result<(), i32> {
             as *mut aya_ebpf::bindings::path
     };
 
-    // Allocate buffer on stack - zero-padded to PATH_MAX for HashMap lookup
-    let mut path_buf: [u8; PATH_MAX] = [0; PATH_MAX];
+    // Use per-CPU scratch buffer to avoid exceeding the 512-byte BPF stack limit
+    let path_buf = match PATH_SCRATCH.get_ptr_mut(0) {
+        Some(ptr) => unsafe { &mut *ptr },
+        None => return Ok(()),
+    };
+
     let ret = unsafe {
         bpf_d_path(
             path_ptr,
@@ -125,7 +134,7 @@ fn try_path_open(ctx: &LsmContext) -> Result<(), i32> {
     let is_write = access_mode == O_WRONLY || access_mode == O_RDWR;
 
     // Check if this path is in the deny list
-    match unsafe { DENY_PATHS.get(&path_buf) } {
+    match unsafe { DENY_PATHS.get(&*path_buf) } {
         Some(denied_mode) => {
             // Check if the current access mode matches the denied mode
             let should_deny = match *denied_mode {
