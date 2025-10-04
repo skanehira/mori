@@ -6,6 +6,10 @@
 
 # mori - 杜
 
+<p align="center">
+  <img src="docs/images/mori.png" alt="mori" width="400"/>
+</p>
+
 A security sandbox tool that controls network and file access for processes using eBPF on Linux and sandbox-exec on macOS.
 
 ## Features
