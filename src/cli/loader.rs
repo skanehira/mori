@@ -12,9 +12,6 @@ impl PolicyLoader {
     pub fn load(args: &Args) -> Result<Policy, MoriError> {
         let mut network_policy = NetworkPolicy::from_allow_all(args.allow_network_all);
 
-        #[cfg(target_os = "macos")]
-        let file_policy = FilePolicy::new();
-        #[cfg(target_os = "linux")]
         let mut file_policy = FilePolicy::new();
 
         // Load configuration file if specified
@@ -25,25 +22,23 @@ impl PolicyLoader {
             // TODO: Load file policy from config file
         }
 
-        // Load policies from CLI arguments (only on Linux)
-        #[cfg(target_os = "linux")]
-        {
-            // Network policy
-            if !args.allow_network_all {
-                let cli_network_policy = NetworkPolicy::from_entries(&args.allow_network)?;
-                network_policy.merge(cli_network_policy);
-            }
+        // Load policies from CLI arguments
+        // Network policy (Linux only - macOS doesn't support --allow-network)
+        #[cfg(not(target_os = "macos"))]
+        if !args.allow_network_all {
+            let cli_network_policy = NetworkPolicy::from_entries(&args.allow_network)?;
+            network_policy.merge(cli_network_policy);
+        }
 
-            // File policy (deny-list mode)
-            for path in &args.deny_file {
-                file_policy.deny_read_write(path);
-            }
-            for path in &args.deny_file_read {
-                file_policy.deny_read(path);
-            }
-            for path in &args.deny_file_write {
-                file_policy.deny_write(path);
-            }
+        // File policy (deny-list mode) - available on all platforms
+        for path in &args.deny_file {
+            file_policy.deny_read_write(path);
+        }
+        for path in &args.deny_file_read {
+            file_policy.deny_read(path);
+        }
+        for path in &args.deny_file_write {
+            file_policy.deny_write(path);
         }
 
         Ok(Policy {

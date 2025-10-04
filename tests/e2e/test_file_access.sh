@@ -1,14 +1,28 @@
 #!/usr/bin/env bash
-# Linux E2E tests for mori file access control
+# E2E tests for mori file access control
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 cargo build --release
 
-BIN="sudo ./target/release/mori"
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+BIN="./target/release/mori"
+if [[ "$(uname)" == "Linux" ]]; then
+    BIN="sudo ./target/release/mori"
+fi
+
+# Use project-local tmp directory instead of system /tmp
+# because macOS system.sb always allows /tmp
+TEMP_DIR="$(pwd)/tmp/test-$$"
+mkdir -p "$TEMP_DIR"
+
+# Cleanup function to ensure tmp directory is removed
+cleanup() {
+    rm -rf "$TEMP_DIR"
+    # Remove tmp directory if empty
+    rmdir "$(pwd)/tmp" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 echo "Testing file access control..."
 
