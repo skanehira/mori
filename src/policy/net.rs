@@ -7,9 +7,10 @@ use crate::{error::MoriError, net::parse_allow_network};
 pub enum AllowPolicy {
     /// Allow all network connections
     All,
-    /// Allow specific entries (IPs and domains)
+    /// Allow specific entries (IPs, CIDR ranges, and domains)
     Entries {
         allowed_ipv4: Vec<Ipv4Addr>,
+        allowed_cidr: Vec<(Ipv4Addr, u8)>,
         allowed_domains: Vec<String>,
     },
 }
@@ -25,6 +26,7 @@ impl Default for NetworkPolicy {
         Self {
             policy: AllowPolicy::Entries {
                 allowed_ipv4: Vec::new(),
+                allowed_cidr: Vec::new(),
                 allowed_domains: Vec::new(),
             },
         }
@@ -54,6 +56,7 @@ impl NetworkPolicy {
         Ok(Self {
             policy: AllowPolicy::Entries {
                 allowed_ipv4: network_rules.direct_v4,
+                allowed_cidr: network_rules.cidr_v4,
                 allowed_domains: network_rules.domains,
             },
         })
@@ -78,16 +81,23 @@ impl NetworkPolicy {
             (
                 AllowPolicy::Entries {
                     allowed_ipv4: base_ips,
+                    allowed_cidr: base_cidrs,
                     allowed_domains: base_domains,
                 },
                 AllowPolicy::Entries {
                     allowed_ipv4: other_ips,
+                    allowed_cidr: other_cidrs,
                     allowed_domains: other_domains,
                 },
             ) => {
                 for ip in other_ips {
                     if !base_ips.contains(&ip) {
                         base_ips.push(ip);
+                    }
+                }
+                for cidr in other_cidrs {
+                    if !base_cidrs.contains(&cidr) {
+                        base_cidrs.push(cidr);
                     }
                 }
                 for domain in other_domains {
@@ -118,9 +128,11 @@ mod tests {
         match policy.policy {
             AllowPolicy::Entries {
                 allowed_ipv4,
+                allowed_cidr,
                 allowed_domains,
             } => {
                 assert!(allowed_ipv4.is_empty());
+                assert!(allowed_cidr.is_empty());
                 assert!(allowed_domains.is_empty());
             }
             _ => panic!("Expected Entries variant"),
@@ -135,9 +147,11 @@ mod tests {
         match policy.policy {
             AllowPolicy::Entries {
                 allowed_ipv4,
+                allowed_cidr,
                 allowed_domains,
             } => {
                 assert_eq!(allowed_ipv4.len(), 1);
+                assert_eq!(allowed_cidr.len(), 0);
                 assert_eq!(allowed_domains.len(), 1);
             }
             _ => panic!("Expected Entries variant"),
@@ -168,9 +182,11 @@ mod tests {
         match base.policy {
             AllowPolicy::Entries {
                 allowed_ipv4,
+                allowed_cidr,
                 allowed_domains,
             } => {
                 assert_eq!(allowed_ipv4.len(), 1);
+                assert_eq!(allowed_cidr.len(), 0);
                 assert_eq!(allowed_domains.len(), 1);
             }
             _ => panic!("Expected Entries variant"),
@@ -189,9 +205,11 @@ mod tests {
         match base.policy {
             AllowPolicy::Entries {
                 allowed_ipv4,
+                allowed_cidr,
                 allowed_domains,
             } => {
                 assert_eq!(allowed_ipv4.len(), 1);
+                assert_eq!(allowed_cidr.len(), 0);
                 assert_eq!(allowed_domains.len(), 1);
             }
             _ => panic!("Expected Entries variant"),

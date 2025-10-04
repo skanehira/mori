@@ -141,12 +141,13 @@ pub async fn execute_with_policy(
     }
 
     // Extract entries from network policy
-    let (allowed_ipv4, domain_names) = match &policy.network.policy {
+    let (allowed_ipv4, allowed_cidr, domain_names) = match &policy.network.policy {
         AllowPolicy::Entries {
             allowed_ipv4,
+            allowed_cidr,
             allowed_domains,
-        } => (allowed_ipv4.clone(), allowed_domains.clone()),
-        AllowPolicy::All => (vec![], vec![]),
+        } => (allowed_ipv4.clone(), allowed_cidr.clone(), allowed_domains.clone()),
+        AllowPolicy::All => (vec![], vec![], vec![]),
     };
 
     let resolver = SystemDnsResolver;
@@ -168,12 +169,16 @@ pub async fn execute_with_policy(
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
         let now = Instant::now();
 
-        // Add allowed IP addresses to the map
+        // Add allowed IP addresses and CIDR ranges to the map
         {
             let mut ebpf_guard = ebpf.lock().unwrap();
             for &ip in &allowed_ipv4 {
                 ebpf_guard.allow_ipv4(ip)?;
                 log::info!("Added {} to network allow list", ip);
+            }
+            for &(network, prefix_len) in &allowed_cidr {
+                ebpf_guard.allow_cidr(network, prefix_len)?;
+                log::info!("Added {}/{} to network allow list", network, prefix_len);
             }
         }
 

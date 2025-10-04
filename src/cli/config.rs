@@ -81,9 +81,11 @@ mod tests {
         match policy.policy {
             AllowPolicy::Entries {
                 allowed_ipv4,
+                allowed_cidr,
                 allowed_domains,
             } => {
                 assert_eq!(allowed_ipv4.len(), 1);
+                assert_eq!(allowed_cidr.len(), 0);
                 assert_eq!(allowed_domains.len(), 1);
             }
             _ => panic!("Expected Entries variant"),

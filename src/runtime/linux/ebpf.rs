@@ -1,10 +1,9 @@
 use std::{convert::TryInto, net::Ipv4Addr, os::fd::BorrowedFd};
 
 use aya::{
-    include_bytes_aligned,
+    Ebpf, include_bytes_aligned,
     maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
-    Ebpf,
 };
 
 #[cfg(test)]
@@ -75,6 +74,41 @@ impl NetworkEbpf {
         let key = addr.to_bits().to_be();
         map.insert(key, 1, 0) // 1 = allowed, flags = 0 (BPF_ANY)
             .map_err(MoriError::Map)?;
+        Ok(())
+    }
+
+    /// Add a CIDR range to the allow list
+    ///
+    /// Note: Only supports CIDR ranges with prefix length >= 24 to avoid map size issues
+    pub fn allow_cidr(&mut self, network: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
+        if prefix_len < 24 {
+            return Err(MoriError::InvalidAllowNetworkEntry {
+                entry: format!("{}/{}", network, prefix_len),
+                reason: "CIDR prefix length must be >= 24 (max 256 addresses). Use /24 or higher for security.".to_string(),
+            });
+        }
+
+        let mut map: HashMap<_, u32, u8> =
+            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
+
+        let network_bits = network.to_bits();
+        let mask = if prefix_len == 0 {
+            0
+        } else {
+            !0u32 << (32 - prefix_len)
+        };
+        let network_addr = network_bits & mask;
+
+        // Calculate the number of addresses in the CIDR range (safe because prefix_len >= 24)
+        let num_addresses = 1u32 << (32 - prefix_len);
+
+        // Add each IP in the range individually
+        for i in 0..num_addresses {
+            let ip_bits = network_addr.wrapping_add(i);
+            let key = ip_bits.to_be();
+            map.insert(key, 1, 0).map_err(MoriError::Map)?;
+        }
+
         Ok(())
     }
 
