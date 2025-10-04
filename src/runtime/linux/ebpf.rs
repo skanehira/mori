@@ -1,9 +1,10 @@
 use std::{convert::TryInto, net::Ipv4Addr, os::fd::BorrowedFd};
 
 use aya::{
-    Ebpf, include_bytes_aligned,
+    include_bytes_aligned,
     maps::HashMap,
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
+    Ebpf,
 };
 
 #[cfg(test)]
@@ -30,6 +31,11 @@ impl NetworkEbpf {
     /// Load the mori eBPF program and attach the connect4 hook to the provided cgroup fd.
     pub fn load_and_attach(cgroup_fd: BorrowedFd<'_>) -> Result<Self, MoriError> {
         let mut bpf = Ebpf::load(EBPF_ELF)?;
+
+        // Initialize aya-log for eBPF logging
+        if let Err(e) = aya_log::EbpfLogger::init(&mut bpf) {
+            log::warn!("Failed to initialize eBPF logger for NetworkEbpf: {}", e);
+        }
 
         for name in PROGRAM_NAMES {
             let program = bpf
