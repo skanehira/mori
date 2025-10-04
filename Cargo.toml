@@ -5,8 +5,14 @@ resolver = "2"
 [package]
 name = "mori"
 version = "0.0.1"
-authors = ["skanehira"]
+authors = ["skanehira <sho19921005@gmail.com>"]
 edition = "2024"
+description = "Security sandbox tool for controlling network and file access using eBPF (Linux) and sandbox-exec (macOS)"
+license = "MIT OR GPL-2"
+repository = "https://github.com/skanehira/mori"
+readme = "README.md"
+keywords = ["security", "sandbox", "ebpf", "network", "filesystem"]
+categories = ["command-line-utilities", "os::linux-apis", "development-tools"]
 
 [dependencies]
 clap = { version = "4.5.48", features = ["derive"] }

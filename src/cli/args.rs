@@ -3,11 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(
-    author,
-    version,
-    about = "Network and file access sandbox for Linux using eBPF"
-)]
+#[command(author, version, about)]
 pub struct Args {
     /// Path to configuration file (TOML)
     #[arg(long = "config", value_name = "PATH")]
