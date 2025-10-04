@@ -146,7 +146,11 @@ pub async fn execute_with_policy(
             allowed_ipv4,
             allowed_cidr,
             allowed_domains,
-        } => (allowed_ipv4.clone(), allowed_cidr.clone(), allowed_domains.clone()),
+        } => (
+            allowed_ipv4.clone(),
+            allowed_cidr.clone(),
+            allowed_domains.clone(),
+        ),
         AllowPolicy::All => (vec![], vec![], vec![]),
     };
 
