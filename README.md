@@ -4,11 +4,7 @@
 ![GitHub CI Status](https://img.shields.io/github/actions/workflow/status/skanehira/mori/ci.yaml?branch=main)
 ![GitHub Release Status](https://img.shields.io/github/v/release/skanehira/mori)
 
-# mori - 杜
-
-<p align="center">
-  <img src="docs/images/mori.png" alt="mori" width="400"/>
-</p>
+<h1>mori -<img src="docs/images/mori.png" alt="杜" height="50" align="center"/></h1>
 
 A security sandbox tool that controls network and file access for processes using eBPF on Linux and sandbox-exec on macOS.
 
