@@ -1,35 +1,35 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/`: Rust CLI entrypoints and platform runtimes. Key files include `main.rs` for argument parsing and `runtime/linux.rs` for cgroup/eBPF orchestration.
-- `mori-bpf/`: no_std sub-crate containing the `cgroup_sock_addr` eBPF programs (`src/main.rs`). Built automatically via `build.rs`.
-- `docs/`: architectural notes, roadmap, and interface specifications. Consult `design.md` and `ebpf_cgroup_architecture.md` before making behavioral changes.
-- `target/`: Cargo build artifacts. Generated files should never be committed.
+- `src/` houses the CLI entrypoint `main.rs` plus modules: `cli/` (argument parsing), `policy/` (access rules), `net/` (resolver/cache), and `runtime/` for OS backends. Linux orchestration sits under `runtime/linux/` (cgroups, DNS, eBPF), while `runtime/macos.rs` wraps sandbox-exec.
+- `mori-bpf/` is the no_std workspace member with programs in `src/main.rs`; `build.rs` rebuilds and embeds the ELF automatically on Linux.
+- `tests/e2e/` contains shell smoke/regression scripts; inline `mod tests` blocks live next to Rust modules for unit coverage.
+- `docs/development_guide.md` documents environment requirements; review it before altering runtime behavior.
+- `target/` is the build output cache and must stay untracked.
 
 ## Build, Test, and Development Commands
-- `cargo check`: Fast validation of host-side Rust code; run after every edit cycle.
-- `cargo fmt && cargo clippy --all-targets --all-features`: Enforce formatting and linting before committing.
-- `cargo test`: Execute the host-side unit test suite.
-- `cargo build --release`: Produce distributable binaries and rebuild the embedded eBPF object via `build.rs`.
-- `sudo target/release/mori --allow-network=example.com -- curl https://example.com`: Quick manual smoke test; requires CAP_BPF/CAP_SYS_ADMIN and a kernel with cgroup v2 + eBPF enabled.
+- `cargo check` – fast validation after edits.
+- `cargo fmt && cargo clippy --all-targets --all-features` – enforce formatting and lints prior to review.
+- `cargo nextest run` (or `make test`) – run the suite; `make test` also runs doc tests.
+- `cargo test` – quick fallback when iterating locally.
+- `cargo build --release` or `make build` – produce optimized binaries and refresh the embedded eBPF object.
+- `sudo target/release/mori --allow-network www.google.com -- curl https://www.google.com` – Linux smoke test requiring CAP_BPF and cgroup v2.
 
 ## Coding Style & Naming Conventions
-- Rust code follows standard `rustfmt` defaults (4-space indent, snake_case for items, UpperCamelCase for types).
-- Keep module paths aligned with existing layout (`runtime::linux`, `policy::*`).
-- eBPF programs stay in `mori-bpf` with explicit `#[map]` identifiers in SCREAMING_SNAKE_CASE.
-- Prefer concise comments that explain intent, not implementation mechanics.
+- Use `rustfmt` defaults (4-space indent, snake_case functions, UpperCamelCase types) and keep module namespaces aligned (`runtime::linux`, `policy::*`, `net::*`).
+- eBPF maps/programs in `mori-bpf` define explicit SCREAMING_SNAKE_CASE identifiers with `#[map]` attributes.
+- Keep comments focused on intent or kernel constraints, not line-by-line narration.
 
 ## Testing Guidelines
-- Use `cargo test` for host logic. Place new tests alongside implementation modules using the `mod tests` pattern.
-- Manual eBPF validation relies on attaching programs to a disposable cgroup; document reproduction steps in PR descriptions when adding kernel interactions.
-- Aim for coverage of parsing, policy translation, and error paths. Add regression tests when fixing bugs.
+- Add unit tests beside implementations via `mod tests`, reusing `rstest` and `mockall` patterns.
+- Run `cargo nextest run` and `cargo test --doc` before pushing; document manual steps when using `tests/e2e/run_tests.sh` or custom cgroup experiments.
+- Target regression coverage for policy parsing, resolver caching, and runtime error paths whenever bugs are fixed.
 
 ## Commit & Pull Request Guidelines
-- Write commits in the imperative mood (“Add Hickory resolver cache”) and keep scopes narrow.
-- Reference related docs or issues in commit messages when behavior changes (e.g., “Refer doc/design.md for TTL policy”).
-- PRs should include: summary of changes, testing evidence (`cargo check`, `cargo test`, manual sandbox runs if applicable), and any security or permission considerations.
-- Request review when CI equivalents succeed and ensure no generated artifacts or `target/` files are staged.
+- Write imperative commit subjects (e.g., `Add ICMP deny policy`) and reference docs such as `docs/development_guide.md` when behavior changes.
+- PR summaries should capture intent, list executed commands (`cargo check`, `cargo nextest run`, smoke tests), link issues, and flag security or permission impacts.
+- Ensure `git status` is clean aside from intentional edits; never stage `target/` or generated artifacts.
 
-## System & Security Notes
-- Development requires Linux 5.13+ with cgroup v2 and CAP_BPF. macOS support is orchestrated separately; do not modify sandbox-exec logic in Linux-focused PRs.
-- Treat `/sys/fs/cgroup/mori-*` directories as ephemeral; never rely on them for persistent state.
+## Security & Environment Notes
+- Linux development targets kernel 5.10+ with cgroup v2, `CONFIG_BPF_LSM=y`, and capabilities CAP_BPF, CAP_SYS_ADMIN, CAP_NET_ADMIN; macOS logic is maintained separately.
+- Treat `/sys/fs/cgroup/mori-*` directories as ephemeral and use `/tmp` for logs.
