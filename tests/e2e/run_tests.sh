@@ -8,13 +8,16 @@ cd "$(dirname "$0")"
 case "$(uname -s)" in
     Linux)
         echo "Running network tests..."
-        ./test_linux.sh
+        ./test_network_linux.sh
         echo ""
         echo "Running file access control tests..."
         ./test_file_access.sh
         ;;
     Darwin)
-        exec ./test_macos.sh
+        ./test_network_macos.sh
+        echo ""
+        echo "Running file access control tests..."
+        ./test_file_access.sh
         ;;
     *)
         echo "Unsupported platform: $(uname -s)"
