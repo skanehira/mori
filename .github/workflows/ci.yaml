@@ -109,3 +109,7 @@ jobs:
         uses: k1LoW/octocov-action@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run E2E tests
+        run: |
+          ./tests/e2e/run_tests.sh
