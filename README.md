@@ -12,6 +12,8 @@
 
 A security sandbox tool that controls network and file access for processes using eBPF on Linux and sandbox-exec on macOS.
 
+![](https://i.gyazo.com/3586a7de351913b4287ba2e5b5bfcaac.png)
+
 ## Features
 
 - **Cross-platform**: Works on both Linux (eBPF) and macOS (sandbox-exec)
@@ -63,7 +65,13 @@ The compiled binary will be available at `./target/release/mori`.
 
 Download pre-built binaries from the [Releases](https://github.com/skanehira/mori/releases) page.
 
+> **Note for Linux**: Pre-built Linux binaries are built against a specific kernel version and may not work on different kernel versions due to eBPF compatibility. The kernel version is included in the binary filename (e.g., `mori-x86_64-unknown-linux-gnu-kernel-6.8.0`). If the binary doesn't work on your system, please build from source.
+
 ## Usage
+
+> **Note**: On Linux, `sudo` is required for eBPF and cgroup operations. On macOS, `sudo` is not required as sandbox-exec does not need elevated privileges.
+>
+> **Linux Tip**: To preserve environment variables and PATH when using `sudo`, use `sudo -E env "PATH=$PATH" mori ...`
 
 ### Basic Network Control
 
@@ -71,16 +79,16 @@ Allow network access only to specific domains (Linux only):
 
 ```bash
 # Allow access to example.com
-sudo mori --allow-network example.com -- curl https://example.com
+mori --allow-network example.com -- curl https://example.com
 
 # Allow multiple domains
-sudo mori --allow-network example.com,github.com -- your-command
+mori --allow-network example.com,github.com -- your-command
 
 # Allow specific IP addresses
-sudo mori --allow-network 192.168.1.1 -- your-command
+mori --allow-network 192.168.1.1 -- your-command
 
 # Allow CIDR ranges
-sudo mori --allow-network 10.0.0.0/24 -- your-command
+mori --allow-network 10.0.0.0/24 -- your-command
 
 # Allow all network access (both Linux and macOS)
 mori --allow-network-all -- your-command
@@ -91,17 +99,26 @@ mori --allow-network-all -- your-command
 Deny access to specific files or directories:
 
 ```bash
-# Deny all access (read/write) to a directory
-sudo mori --deny-file /etc/passwd -- your-command
+# Deny all access (read/write) to a file
+mori --deny-file /etc/passwd -- your-command
 
 # Deny read access to specific files
-sudo mori --deny-file-read /etc/shadow,/root/.ssh -- your-command
+mori --deny-file-read /etc/shadow,/root/.ssh -- your-command
 
 # Deny write access to specific directories
-sudo mori --deny-file-write /var/log,/tmp -- your-command
+mori --deny-file-write /var/log,/tmp -- your-command
 
 # Combine multiple file restrictions
-sudo mori --deny-file /etc/passwd --deny-file-write /var -- your-command
+mori --deny-file /etc/passwd --deny-file-write /var -- your-command
+```
+
+### Real-World Example: Claude Code with Network Restrictions
+
+Restrict Claude Code to only access Anthropic's API:
+
+```bash
+# Linux (preserving PATH for the claude command)
+sudo -E env "PATH=$PATH" mori --allow-network api.anthropic.com -- claude
 ```
 
 ### Using Configuration Files
