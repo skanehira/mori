@@ -5,52 +5,151 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to run'
+        required: false
+        type: choice
+        options:
+          - all
+          - build
+          - release
+        default: all
 
 permissions:
-  # for goreleaser
   contents: write
 
 jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.job == 'all' ||
+        github.event.inputs.job == 'build' ||
+        github.event.inputs.job == 'release'))
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact_name: mori
+            asset_suffix: linux-x86_64
+          # Linux ARM64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: mori
+            asset_suffix: linux-aarch64
+          # macOS x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: mori
+            asset_suffix: darwin-x86_64
+          # macOS ARM64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: mori
+            asset_suffix: darwin-aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbpf-dev linux-tools-common linux-tools-$(uname -r)
+
+      - name: Install Rust nightly (Linux only for eBPF)
+        if: runner.os == 'Linux'
+        run: |
+          rustup toolchain install nightly-$(rustc -Vv | grep host | cut -d' ' -f2) --profile minimal --component rust-src
+          cargo install bpf-linker
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: true
+
+      - name: Get kernel version (Linux only)
+        if: runner.os == 'Linux'
+        id: kernel
+        run: |
+          KERNEL_VERSION=$(uname -r | cut -d- -f1)
+          echo "version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          KERNEL_VERSION="${{ steps.kernel.outputs.version }}"
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} \
+             ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}-kernel-${KERNEL_VERSION}
+
+      - name: Prepare binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} \
+             ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}
+
+      - name: Create tarball (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          KERNEL_VERSION="${{ steps.kernel.outputs.version }}"
+          tar czf ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}-kernel-${KERNEL_VERSION}.tar.gz \
+                  ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}-kernel-${KERNEL_VERSION}
+
+      - name: Create tarball (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          tar czf ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}.tar.gz \
+                  ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_suffix }}${{ runner.os == 'Linux' && format('-kernel-{0}', steps.kernel.outputs.version) || '' }}
+          path: '*.tar.gz'
+
   release:
-    name: Release
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.job == 'all' || github.event.inputs.job == 'release'))
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: (setup) sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-      
-      - name: (setup) environment variables for sccache
-        shell: bash
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate changelog
+        id: changelog
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          # Simple changelog from git log
+          echo "## Changes" > CHANGELOG.md
+          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --oneline >> CHANGELOG.md || echo "Initial release" >> CHANGELOG.md
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          cache-shared-key: setup-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
-          target: "x86_64-unknown-linux-gnu, x86_64-apple-darwin, x86_64-pc-windows-gnu, aarch64-unknown-linux-gnu, aarch64-apple-darwin"
-          rustflags: "" # override default rustflags
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache: true
-
-      - name: Install zig
-        uses: mlugg/setup-zig@v2
-
-      - name: Install cargo-zigbuild
-        run: |
-          cargo install cargo-zigbuild
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+          files: artifacts/**/*.tar.gz
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
