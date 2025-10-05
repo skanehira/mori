@@ -2,16 +2,16 @@ build:
 	@cargo build --release 
 
 run-allow-net: build
-	@sudo ./target/release/mori --allow-network www.google.com -- ping -c 1 www.google.com
+	@sudo RUST_LOG=info ./target/release/mori --allow-network www.google.com -- ping -c 1 www.google.com
 
 run-deny-net: build
-	@sudo ./target/release/mori -- ping -c 1 www.google.com
+	@sudo RUST_LOG=info ./target/release/mori -- ping -c 1 www.google.com
 
 run-deny-file: build
-	@sudo ./target/release/mori --deny-file-read README.md -- cat README.md
+	@sudo RUST_LOG=info ./target/release/mori --deny-file-read README.md -- cat README.md
 
 run-allow-file: build
-	@sudo ./target/release/mori -- cat README.md > /dev/null && echo "ok"
+	@sudo RUST_LOG=info ./target/release/mori -- cat README.md > /dev/null && echo "ok"
 
 test:
 	@cargo nextest run
