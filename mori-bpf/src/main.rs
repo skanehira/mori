@@ -58,10 +58,12 @@ static PATH_SCRATCH: PerCpuArray<[u8; PATH_MAX]> = PerCpuArray::with_max_entries
 #[cgroup_sock_addr(connect4)]
 pub fn mori_connect4(ctx: SockAddrContext) -> i32 {
     let addr = unsafe { (*ctx.sock_addr).user_ip4 };
+    // When a 32-bit value is loaded in BPF it lands in CPU-endian order (little-endian on x86/arm64).
+    // Convert back to big-endian so it matches the network-ordered keys stored in the map.
+    let addr_be = u32::from_be(addr);
+    let ip_bytes = addr_be.to_be_bytes();
 
-    let ip_bytes = addr.to_le_bytes();
-
-    match unsafe { ALLOW_V4.get(&addr) } {
+    match unsafe { ALLOW_V4.get(&addr_be) } {
         Some(_) => {
             info!(
                 &ctx,

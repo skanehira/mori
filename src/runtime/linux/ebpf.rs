@@ -71,7 +71,9 @@ impl NetworkEbpf {
     pub fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
         let mut map: HashMap<_, u32, u8> =
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
-        let key = addr.to_bits().to_be();
+        // Ipv4Addr::to_bits() returns a network byte order (big-endian) u32, so the value
+        // can be compared directly with the big-endian keys restored inside the eBPF program.
+        let key = addr.to_bits();
         map.insert(key, 1, 0) // 1 = allowed, flags = 0 (BPF_ANY)
             .map_err(MoriError::Map)?;
         Ok(())
@@ -105,7 +107,7 @@ impl NetworkEbpf {
         // Add each IP in the range individually
         for i in 0..num_addresses {
             let ip_bits = network_addr.wrapping_add(i);
-            let key = ip_bits.to_be();
+            let key = ip_bits;
             map.insert(key, 1, 0).map_err(MoriError::Map)?;
         }
 
@@ -115,7 +117,8 @@ impl NetworkEbpf {
     pub fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
         let mut map: HashMap<_, u32, u8> =
             HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
-        let key = addr.to_bits().to_be();
+        // remove must use the same network-ordered representation as allow.
+        let key = addr.to_bits();
         map.remove(&key).map_err(MoriError::Map)?;
         Ok(())
     }
