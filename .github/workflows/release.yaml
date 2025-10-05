@@ -68,7 +68,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           rustup toolchain install nightly-$(rustc -Vv | grep host | cut -d' ' -f2) --profile minimal --component rust-src
-          cargo install bpf-linker
+          cargo install bpf-linker bindgen-cli
+          cargo install --git https://github.com/aya-rs/aya -- aya-tool
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
