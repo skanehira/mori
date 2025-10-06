@@ -2,7 +2,7 @@ use std::{convert::TryInto, net::Ipv4Addr, os::fd::BorrowedFd};
 
 use aya::{
     Ebpf, include_bytes_aligned,
-    maps::HashMap,
+    maps::lpm_trie::{Key, LpmTrie},
     programs::{cgroup_sock_addr::CgroupSockAddr, links::CgroupAttachMode},
 };
 
@@ -17,8 +17,8 @@ const PROGRAM_NAMES: &[&str] = &["mori_connect4"];
 /// eBPF controller abstraction for testing
 #[cfg_attr(test, automock)]
 pub trait EbpfController: Send + Sync + 'static {
-    fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
-    fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError>;
+    fn allow_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError>;
+    fn remove_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError>;
 }
 
 /// Holds the loaded eBPF object. Dropping this struct detaches the programs automatically.
@@ -67,33 +67,29 @@ impl NetworkEbpf {
         Ok(Self { bpf })
     }
 
-    /// Add an IPv4 address to the allow list
-    pub fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
-        let mut map: HashMap<_, u32, u8> =
-            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
-        // Ipv4Addr::to_bits() returns a network byte order (big-endian) u32, so the value
-        // can be compared directly with the big-endian keys restored inside the eBPF program.
-        let key = addr.to_bits();
-        map.insert(key, 1, 0) // 1 = allowed, flags = 0 (BPF_ANY)
-            .map_err(MoriError::Map)?;
-        Ok(())
-    }
-
-    /// Add a CIDR range to the allow list
+    /// Add a single IPv4 address or CIDR range to the allow list
     ///
-    /// Note: Only supports CIDR ranges with prefix length >= 24 to avoid map size issues
-    pub fn allow_cidr(&mut self, network: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
-        if prefix_len < 24 {
+    /// # Arguments
+    /// - addr: Network address (e.g., 192.168.1.1 or 10.0.0.0)
+    /// - prefix_len: Prefix length (32=single IP, 24=/24, 13=/13, etc.)
+    ///
+    /// # Behavior
+    /// - prefix_len=32: Registered as a single IP address
+    /// - prefix_len<32: Registered as a CIDR range
+    /// - Registered as 1 entry in LPM Trie (no expansion like HashMap)
+    pub fn allow_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
+        if prefix_len > 32 {
             return Err(MoriError::InvalidAllowNetworkEntry {
-                entry: format!("{}/{}", network, prefix_len),
-                reason: "CIDR prefix length must be >= 24 (max 256 addresses). Use /24 or higher for security.".to_string(),
+                entry: format!("{}/{}", addr, prefix_len),
+                reason: "Prefix length must be 0-32 for IPv4".to_string(),
             });
         }
 
-        let mut map: HashMap<_, u32, u8> =
-            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
+        let mut map: LpmTrie<_, [u8; 4], u8> =
+            LpmTrie::try_from(self.bpf.map_mut("ALLOW_V4_LPM").unwrap())?;
 
-        let network_bits = network.to_bits();
+        // Normalize network address (apply mask based on prefix_len)
+        let network_bits = addr.to_bits();
         let mask = if prefix_len == 0 {
             0
         } else {
@@ -101,35 +97,43 @@ impl NetworkEbpf {
         };
         let network_addr = network_bits & mask;
 
-        // Calculate the number of addresses in the CIDR range (safe because prefix_len >= 24)
-        let num_addresses = 1u32 << (32 - prefix_len);
+        // Convert to network byte order (big-endian) byte array
+        let be_bytes = network_addr.to_be_bytes();
+        let key = Key::new(prefix_len as u32, be_bytes);
 
-        // Add each IP in the range individually
-        for i in 0..num_addresses {
-            let ip_bits = network_addr.wrapping_add(i);
-            let key = ip_bits;
-            map.insert(key, 1, 0).map_err(MoriError::Map)?;
-        }
+        // Insert into LPM Trie
+        // flags=0 (BPF_ANY) overwrites existing entry if present (same behavior as HashMap)
+        map.insert(&key, 1, 0).map_err(MoriError::Map)?;
 
         Ok(())
     }
 
-    pub fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
-        let mut map: HashMap<_, u32, u8> =
-            HashMap::try_from(self.bpf.map_mut("ALLOW_V4").unwrap())?;
-        // remove must use the same network-ordered representation as allow.
-        let key = addr.to_bits();
+    /// Remove an IPv4 address from the allow list
+    pub fn remove_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
+        let mut map: LpmTrie<_, [u8; 4], u8> =
+            LpmTrie::try_from(self.bpf.map_mut("ALLOW_V4_LPM").unwrap())?;
+
+        let network_bits = addr.to_bits();
+        let mask = if prefix_len == 0 {
+            0
+        } else {
+            !0u32 << (32 - prefix_len)
+        };
+        let network_addr = network_bits & mask;
+        let be_bytes = network_addr.to_be_bytes();
+        let key = Key::new(prefix_len as u32, be_bytes);
+
         map.remove(&key).map_err(MoriError::Map)?;
         Ok(())
     }
 }
 
 impl EbpfController for NetworkEbpf {
-    fn allow_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
-        self.allow_ipv4(addr)
+    fn allow_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
+        self.allow_network(addr, prefix_len)
     }
 
-    fn remove_ipv4(&mut self, addr: Ipv4Addr) -> Result<(), MoriError> {
-        self.remove_ipv4(addr)
+    fn remove_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
+        self.remove_network(addr, prefix_len)
     }
 }

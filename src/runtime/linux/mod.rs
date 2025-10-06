@@ -180,15 +180,15 @@ pub async fn execute_with_policy(
 
             // Always allow localhost (127.0.0.1) by default
             let localhost: Ipv4Addr = "127.0.0.1".parse().unwrap();
-            ebpf_guard.allow_ipv4(localhost)?;
-            log::info!("Added {} (localhost) to network allow list", localhost);
+            ebpf_guard.allow_network(localhost, 32)?; // /32 = single IP
+            log::info!("Added {}/32 (localhost) to network allow list", localhost);
 
             for &ip in &allowed_ipv4 {
-                ebpf_guard.allow_ipv4(ip)?;
-                log::info!("Added {} to network allow list", ip);
+                ebpf_guard.allow_network(ip, 32)?; // /32 = single IP
+                log::info!("Added {}/32 to network allow list", ip);
             }
             for &(network, prefix_len) in &allowed_cidr {
-                ebpf_guard.allow_cidr(network, prefix_len)?;
+                ebpf_guard.allow_network(network, prefix_len)?;
                 log::info!("Added {}/{} to network allow list", network, prefix_len);
             }
         }

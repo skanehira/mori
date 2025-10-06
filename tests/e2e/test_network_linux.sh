@@ -114,5 +114,30 @@ if echo "$output" | grep -qiE "^HTTP/[0-9.]+ (200|301|302)"; then
 fi
 echo "  [7-2] PASS"
 
+# Test 8: /16 CIDR range allowlist works (tests LPM Trie with larger ranges)
+echo "[Test 8] /16 CIDR range allowlist works"
+echo "  [8-1] Testing: curl to IP within allowed /16 CIDR range should succeed"
+# Use /16 CIDR which allows 65536 addresses (23.192.0.0 - 23.192.255.255)
+# 23.192.228.80 is within this range
+output=$($BIN --allow-network "23.192.0.0/16" -- curl --max-time 5 -I -H "Host: example.com" http://23.192.228.80 2>&1)
+if ! echo "$output" | grep -qiE "^HTTP/[0-9.]+ (200|301|302)"; then
+    echo "FAIL [8-1]: IP within allowed /16 CIDR range should be accessible"
+    echo "  Command: $BIN --allow-network 23.192.0.0/16 -- curl --max-time 5 -I -H \"Host: example.com\" http://23.192.228.80"
+    echo "  Output: $output"
+    exit 1
+fi
+echo "  [8-1] PASS"
+
+echo "  [8-2] Testing: curl to IP outside allowed /16 CIDR range should be blocked"
+# 23.220.75.232 is outside the /16 range (23.192.0.0/16)
+output=$($BIN --allow-network "23.192.0.0/16" -- curl --max-time 5 -I -H "Host: example.com" http://23.220.75.232 2>&1 || true)
+if echo "$output" | grep -qiE "^HTTP/[0-9.]+ (200|301|302)"; then
+    echo "FAIL [8-2]: IP outside allowed /16 CIDR range should be blocked"
+    echo "  Command: $BIN --allow-network 23.192.0.0/16 -- curl --max-time 5 -I -H \"Host: example.com\" http://23.220.75.232"
+    echo "  Output: $output"
+    exit 1
+fi
+echo "  [8-2] PASS"
+
 echo ""
 echo "All network access control tests passed!"

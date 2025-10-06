@@ -34,11 +34,11 @@ pub fn apply_domain_records<E: EbpfController>(
     let mut ebpf_guard = ebpf.lock().unwrap();
     for diff in diffs {
         for ip in diff.removed {
-            ebpf_guard.remove_ipv4(ip)?;
+            ebpf_guard.remove_network(ip, 32)?; // DNS resolved IPs are single IPs (/32)
             log::info!("Resolved domain IPv4 {} removed from allow list", ip);
         }
         for ip in diff.added {
-            ebpf_guard.allow_ipv4(ip)?;
+            ebpf_guard.allow_network(ip, 32)?; // DNS resolved IPs are single IPs (/32)
             log::info!("Resolved domain IPv4 {} added to allow list", ip);
         }
     }
@@ -56,7 +56,7 @@ pub fn apply_dns_servers<E: EbpfController>(
 
     for ip in ips {
         if set.insert(ip) {
-            ebpf_guard.allow_ipv4(ip)?;
+            ebpf_guard.allow_network(ip, 32)?; // DNS server IPs are single IPs (/32)
             log::info!("Nameserver IPv4 {} added to allow list", ip);
         }
     }
@@ -164,8 +164,8 @@ mod tests {
 
         let mut mock_ebpf = MockEbpfController::new();
         // eBPF operations should not be called since we terminate early
-        mock_ebpf.expect_allow_ipv4().times(0);
-        mock_ebpf.expect_remove_ipv4().times(0);
+        mock_ebpf.expect_allow_network().times(0);
+        mock_ebpf.expect_remove_network().times(0);
         let ebpf = Arc::new(Mutex::new(mock_ebpf));
 
         let allowed_dns_ips = Arc::new(Mutex::new(HashSet::new()));
@@ -217,12 +217,12 @@ mod tests {
         let mut mock_ebpf = MockEbpfController::new();
         // Allow eBPF operations to succeed
         mock_ebpf
-            .expect_allow_ipv4()
-            .returning(|_| Ok(()))
+            .expect_allow_network()
+            .returning(|_, _| Ok(()))
             .times(..);
         mock_ebpf
-            .expect_remove_ipv4()
-            .returning(|_| Ok(()))
+            .expect_remove_network()
+            .returning(|_, _| Ok(()))
             .times(..);
         let ebpf = Arc::new(Mutex::new(mock_ebpf));
 

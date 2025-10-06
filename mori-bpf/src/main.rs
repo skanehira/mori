@@ -12,7 +12,10 @@ mod vmlinux {
 use aya_ebpf::{
     helpers::{bpf_d_path, bpf_get_current_cgroup_id},
     macros::{cgroup_sock_addr, lsm, map},
-    maps::{HashMap, PerCpuArray},
+    maps::{
+        HashMap, PerCpuArray,
+        lpm_trie::{Key, LpmTrie},
+    },
     programs::{LsmContext, SockAddrContext},
 };
 use aya_log_ebpf::info;
@@ -34,9 +37,11 @@ const O_RDONLY: u32 = 0x0000; // Open for reading only
 const O_WRONLY: u32 = 0x0001; // Open for writing only
 const O_RDWR: u32 = 0x0002; // Open for reading and writing
 
-// Allow list for IPv4 addresses; value presence (1) means allowed
+// Allow list for IPv4 addresses using LPM Trie for efficient CIDR matching
+// Key: Key<[u8; 4]> where prefix_len is the number of significant bits and data is the IPv4 address
+// Value: u8 (1 = allowed)
 #[map]
-static ALLOW_V4: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
+static ALLOW_V4_LPM: LpmTrie<[u8; 4], u8> = LpmTrie::with_max_entries(1024, 0);
 
 // Target cgroup ID for file access control
 // Note: BPF_LSM_CGROUP attach type cannot be used for file_open hook because:
@@ -61,9 +66,17 @@ pub fn mori_connect4(ctx: SockAddrContext) -> i32 {
     // When a 32-bit value is loaded in BPF it lands in CPU-endian order (little-endian on x86/arm64).
     // Convert back to big-endian so it matches the network-ordered keys stored in the map.
     let addr_be = u32::from_be(addr);
-    let ip_bytes = addr_be.to_be_bytes();
 
-    match unsafe { ALLOW_V4.get(&addr_be) } {
+    // For LPM Trie lookup, always use prefix_len=32 (full IPv4 address).
+    // The LPM Trie will find the longest matching prefix automatically.
+    // For example, if searching for 104.16.30.34:
+    // - First tries to match 104.16.30.34/32 (exact match)
+    // - If not found, tries shorter prefixes like 104.16.0.0/13
+    // - Returns the longest matching prefix entry
+    let ip_bytes = addr_be.to_be_bytes();
+    let key = Key::new(32, ip_bytes);
+
+    match ALLOW_V4_LPM.get(&key) {
         Some(_) => {
             info!(
                 &ctx,
