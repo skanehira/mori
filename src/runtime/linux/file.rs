@@ -1,10 +1,6 @@
 use std::{convert::TryFrom, os::fd::BorrowedFd};
 
-use aya::{
-    Btf, Ebpf,
-    maps::HashMap,
-    programs::lsm::{Lsm, LsmLinkId},
-};
+use aya::{Btf, Ebpf, maps::HashMap, programs::lsm::Lsm};
 
 use crate::{
     error::MoriError,
@@ -15,9 +11,7 @@ const PATH_MAX: usize = 512;
 const PROGRAM_NAMES: &[&str] = &["mori_path_open"];
 
 /// File access control using eBPF LSM
-pub struct FileEbpf {
-    _links: Vec<LsmLinkId>,
-}
+pub struct FileEbpf {}
 
 impl FileEbpf {
     /// Load the file LSM eBPF program and attach it
@@ -25,7 +19,7 @@ impl FileEbpf {
         bpf: &mut Ebpf,
         policy: &FilePolicy,
         cgroup_fd: BorrowedFd<'_>,
-    ) -> Result<Self, MoriError> {
+    ) -> Result<(), MoriError> {
         let btf = Btf::from_sys_fs()?;
 
         // Get cgroup ID and register it in TARGET_CGROUP map
@@ -112,7 +106,7 @@ impl FileEbpf {
             log::info!("Attached LSM program: {}", name);
         }
 
-        Ok(Self { _links: links })
+        Ok(())
     }
 }
 

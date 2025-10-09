@@ -77,7 +77,6 @@ impl DnsResolver for SystemDnsResolver {
         }
 
         let resolver = Resolver::builder_tokio().unwrap().build();
-        //let resolver = Resolver::new(config.clone(), opts).map_err(MoriError::Io)?;
 
         let mut domain_records = Vec::with_capacity(domains.len());
 
