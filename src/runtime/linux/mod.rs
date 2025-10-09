@@ -42,7 +42,9 @@ fn spawn_command(
     // Create a pipe for synchronization using libc
     let mut pipe_fds = [0i32; 2];
     if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-        return Err(MoriError::Io(std::io::Error::last_os_error()));
+        return Err(MoriError::PipeCreation {
+            source: std::io::Error::last_os_error(),
+        });
     }
     let read_fd = pipe_fds[0];
     let write_fd = pipe_fds[1];
@@ -56,7 +58,13 @@ fn spawn_command(
             // Add child to cgroup
             let pid = child.as_raw() as u32;
             let procs_path = cgroup_path.join("cgroup.procs");
-            std::fs::write(&procs_path, pid.to_string())?;
+            std::fs::write(&procs_path, pid.to_string()).map_err(|source| {
+                MoriError::CgroupOperation {
+                    operation: "write_pid".to_string(),
+                    path: procs_path.clone(),
+                    source,
+                }
+            })?;
             log::info!("Added process {} to cgroup", pid);
 
             // Signal child to continue by closing write end
@@ -96,7 +104,7 @@ fn spawn_command(
             // If we reach here, exec failed
             panic!("exec failed: {}", err);
         }
-        Err(e) => Err(MoriError::Io(std::io::Error::from(e))),
+        Err(e) => Err(MoriError::ProcessFork { source: e }),
     }
 }
 
@@ -120,7 +128,10 @@ impl ChildProcess {
                 Ok(std::process::ExitStatus::from_raw(signal as i32))
             }
             Ok(_) => Ok(std::process::ExitStatus::from_raw(0)),
-            Err(e) => Err(MoriError::Io(std::io::Error::from(e))),
+            Err(e) => Err(MoriError::ProcessWait {
+                pid: self.pid.as_raw() as u32,
+                source: e,
+            }),
         }
     }
 }
@@ -244,9 +255,7 @@ pub async fn execute_with_policy(
     if let Some((handle, shutdown_signal)) = refresh_handle {
         shutdown_signal.shutdown();
         if let Some(h) = handle {
-            h.await
-                .map_err(|_| std::io::Error::other("refresh thread panicked"))
-                .map_err(MoriError::Io)??;
+            h.await.map_err(|_| MoriError::RefreshTaskPanic)??;
         }
     }
 

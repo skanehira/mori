@@ -79,9 +79,10 @@ impl NetworkEbpf {
     /// - Registered as 1 entry in LPM Trie (no expansion like HashMap)
     pub fn allow_network(&mut self, addr: Ipv4Addr, prefix_len: u8) -> Result<(), MoriError> {
         if prefix_len > 32 {
-            return Err(MoriError::InvalidAllowNetworkEntry {
-                entry: format!("{}/{}", addr, prefix_len),
-                reason: "Prefix length must be 0-32 for IPv4".to_string(),
+            return Err(MoriError::InvalidCidrPrefix {
+                addr,
+                prefix_len,
+                max_allowed: 32,
             });
         }
 

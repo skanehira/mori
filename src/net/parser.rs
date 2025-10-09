@@ -14,6 +14,31 @@ enum HostSpec {
     Domain(String),
 }
 
+/// Errors that can occur during network rule parsing
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum NetworkParseError {
+    #[error("empty value")]
+    EmptyValue,
+
+    #[error("invalid CIDR prefix length")]
+    InvalidCidrPrefixLength,
+
+    #[error("CIDR prefix length must be <= 32")]
+    CidrPrefixTooLarge,
+
+    #[error("invalid IP address in CIDR")]
+    InvalidIpInCidr,
+
+    #[error("IPv6 addresses are not supported")]
+    Ipv6NotSupported,
+
+    #[error("IPv6 CIDR is not supported")]
+    Ipv6CidrNotSupported,
+
+    #[error("invalid port number")]
+    InvalidPortNumber,
+}
+
 #[derive(Default, Debug, PartialEq)]
 pub struct NetworkRules {
     /// IPv4 addresses directly specified in the rules
@@ -54,11 +79,18 @@ pub fn parse_allow_network(entries: &[String]) -> Result<NetworkRules, MoriError
             continue;
         }
 
-        let (host_spec, _port) =
-            parse_single_rule(trimmed).map_err(|reason| MoriError::InvalidAllowNetworkEntry {
+        let (host_spec, _port) = parse_single_rule(trimmed).map_err(|err| match err {
+            NetworkParseError::Ipv6NotSupported | NetworkParseError::Ipv6CidrNotSupported => {
+                MoriError::UnsupportedNetworkProtocol {
+                    entry: raw.clone(),
+                    protocol: "IPv6".to_string(),
+                }
+            }
+            _ => MoriError::InvalidAllowNetworkEntry {
                 entry: raw.clone(),
-                reason,
-            })?;
+                reason: err.to_string(),
+            },
+        })?;
 
         match host_spec {
             HostSpec::Ip(ip) => match ip {
@@ -66,9 +98,9 @@ pub fn parse_allow_network(entries: &[String]) -> Result<NetworkRules, MoriError
                     v4_set.insert(v4);
                 }
                 IpAddr::V6(_) => {
-                    return Err(MoriError::InvalidAllowNetworkEntry {
+                    return Err(MoriError::UnsupportedNetworkProtocol {
                         entry: raw.clone(),
-                        reason: "IPv6 addresses are not supported".to_string(),
+                        protocol: "IPv6".to_string(),
                     });
                 }
             },
@@ -96,28 +128,28 @@ pub fn parse_allow_network(entries: &[String]) -> Result<NetworkRules, MoriError
 /// - IP:port: "192.168.1.1:8080"
 /// - Domain: "example.com"
 /// - Domain:port: "example.com:443"
-fn parse_single_rule(input: &str) -> Result<(HostSpec, Option<Port>), String> {
+fn parse_single_rule(input: &str) -> Result<(HostSpec, Option<Port>), NetworkParseError> {
     if input.is_empty() {
-        return Err("empty value".to_string());
+        return Err(NetworkParseError::EmptyValue);
     }
 
     // Check for CIDR notation
     if let Some((ip_part, prefix_part)) = input.split_once('/') {
         let prefix_len = prefix_part
             .parse::<u8>()
-            .map_err(|_| "invalid CIDR prefix length".to_string())?;
+            .map_err(|_| NetworkParseError::InvalidCidrPrefixLength)?;
 
         if prefix_len > 32 {
-            return Err("CIDR prefix length must be <= 32".to_string());
+            return Err(NetworkParseError::CidrPrefixTooLarge);
         }
 
         let ip = ip_part
             .parse::<IpAddr>()
-            .map_err(|_| "invalid IP address in CIDR".to_string())?;
+            .map_err(|_| NetworkParseError::InvalidIpInCidr)?;
 
         match ip {
             IpAddr::V4(v4) => return Ok((HostSpec::Cidr(v4, prefix_len), None)),
-            IpAddr::V6(_) => return Err("IPv6 CIDR is not supported".to_string()),
+            IpAddr::V6(_) => return Err(NetworkParseError::Ipv6CidrNotSupported),
         }
     }
 
@@ -126,12 +158,12 @@ fn parse_single_rule(input: &str) -> Result<(HostSpec, Option<Port>), String> {
     }
 
     if input.starts_with('[') {
-        return Err("IPv6 addresses are not supported".to_string());
+        return Err(NetworkParseError::Ipv6NotSupported);
     }
 
     if let Ok(sock) = input.parse::<SocketAddr>() {
         if sock.is_ipv6() {
-            return Err("IPv6 addresses are not supported".to_string());
+            return Err(NetworkParseError::Ipv6NotSupported);
         }
         return Ok((HostSpec::Ip(sock.ip()), Some(sock.port())));
     }
@@ -142,7 +174,7 @@ fn parse_single_rule(input: &str) -> Result<(HostSpec, Option<Port>), String> {
     {
         let port = port_part
             .parse::<u16>()
-            .map_err(|_| "invalid port number".to_string())?;
+            .map_err(|_| NetworkParseError::InvalidPortNumber)?;
         if let Ok(ip) = host_part.parse::<IpAddr>() {
             return Ok((HostSpec::Ip(ip), Some(port)));
         } else {
@@ -275,9 +307,17 @@ mod tests {
         let entries = vec![entry.to_string()];
         let result = parse_allow_network(&entries);
         assert!(result.is_err());
-        if let Err(MoriError::InvalidAllowNetworkEntry { reason, .. }) = result {
-            assert!(reason.contains("IPv6"));
-        }
+        assert!(
+            matches!(
+                &result,
+                Err(MoriError::UnsupportedNetworkProtocol {
+                    protocol,
+                    ..
+                }) if protocol == "IPv6"
+            ),
+            "Expected UnsupportedNetworkProtocol error with IPv6, got {:?}",
+            result
+        );
     }
 
     #[rstest]

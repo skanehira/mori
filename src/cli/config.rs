@@ -59,7 +59,10 @@ pub struct FileConfig {
 impl ConfigFile {
     /// Load configuration file
     pub fn load(path: &Path) -> Result<Self, MoriError> {
-        let content = fs::read_to_string(path)?;
+        let content = fs::read_to_string(path).map_err(|source| MoriError::ConfigRead {
+            path: PathBuf::from(path),
+            source,
+        })?;
         toml::from_str(&content).map_err(|source| MoriError::ConfigParse {
             path: PathBuf::from(path),
             source,

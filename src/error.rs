@@ -54,6 +54,53 @@ pub enum MoriError {
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },
 
+    #[error("unsupported network protocol '{protocol}' in entry '{entry}'")]
+    UnsupportedNetworkProtocol { entry: String, protocol: String },
+
+    #[error("invalid CIDR prefix length {prefix_len} for {addr} (must be 0-{max_allowed})")]
+    InvalidCidrPrefix {
+        addr: std::net::Ipv4Addr,
+        prefix_len: u8,
+        max_allowed: u8,
+    },
+
+    #[error("failed to perform cgroup operation '{operation}' on {path}: {source}")]
+    CgroupOperation {
+        operation: String,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to create pipe for process synchronization: {source}")]
+    PipeCreation {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to fork process: {source}")]
+    ProcessFork {
+        #[source]
+        source: nix::Error,
+    },
+
+    #[error("failed to wait for child process {pid}: {source}")]
+    ProcessWait {
+        pid: u32,
+        #[source]
+        source: nix::Error,
+    },
+
+    #[error("DNS refresh task panicked")]
+    RefreshTaskPanic,
+
+    #[error("failed to read config file {path}: {source}")]
+    ConfigRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to parse config {path}: {source}")]
     ConfigParse {
         path: PathBuf,
@@ -89,6 +136,26 @@ pub enum MoriError {
 
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },
+
+    #[error("failed to spawn command '{command}': {source}")]
+    CommandSpawn {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to wait for command: {source}")]
+    CommandWait {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to read config file {path}: {source}")]
+    ConfigRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("failed to parse config {path}: {source}")]
     ConfigParse {

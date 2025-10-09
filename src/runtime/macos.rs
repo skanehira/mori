@@ -24,13 +24,24 @@ pub async fn execute_with_policy(
             .arg(command)
             .args(args)
             .spawn()
-            .map_err(crate::error::MoriError::Io)?
+            .map_err(|source| crate::error::MoriError::CommandSpawn {
+                command: "sandbox-exec".to_string(),
+                source,
+            })?
     } else {
         // No restrictions: execute command directly
-        Command::new(command).args(args).spawn()?
+        Command::new(command).args(args).spawn().map_err(|source| {
+            crate::error::MoriError::CommandSpawn {
+                command: command.to_string(),
+                source,
+            }
+        })?
     };
 
-    let status = child.wait().await.map_err(crate::error::MoriError::Io)?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|source| crate::error::MoriError::CommandWait { source })?;
 
     Ok(status.code().unwrap_or(1))
 }
