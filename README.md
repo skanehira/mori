@@ -57,6 +57,47 @@ cargo build --release
 
 The compiled binary will be available at `./target/release/mori`.
 
+### Using Docker (Recommended for Portability)
+
+To avoid kernel compatibility issues, you can build mori inside a Docker container with all required dependencies pre-installed.
+
+**Prerequisites:**
+- Docker with BuildKit support
+- Docker Buildx (for multi-platform builds)
+
+**Build the builder image:**
+```bash
+# Build for current platform
+make docker-builder-build
+
+# Or build for specific platform
+make docker-builder-build-amd64  # For x86_64
+make docker-builder-build-arm64  # For aarch64
+
+# Or build multi-architecture image
+make docker-builder-build-multiarch
+```
+
+**Build mori inside the container:**
+```bash
+# Build release binary
+make docker-build
+
+# The binary will be available at: ./target/release/mori
+```
+
+**Run tests inside the container:**
+```bash
+make docker-test
+```
+
+**Start an interactive shell (for development):**
+```bash
+make docker-shell
+```
+
+For detailed Docker build instructions, see [docs/docker_build.md](docs/docker_build.md).
+
 ### From Binary Releases
 
 Download pre-built binaries from the [Releases](https://github.com/skanehira/mori/releases) page.
