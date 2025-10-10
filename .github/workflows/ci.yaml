@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
         with:
           components: rustfmt, clippy
           cache-shared-key: setup-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
@@ -48,13 +48,13 @@ jobs:
           cargo install --git https://github.com/aya-rs/aya -- aya-tool
 
       - name: Install reviewdog
-        uses: reviewdog/action-setup@v1
+        uses: reviewdog/action-setup@d8edfce3dd5e1ec6978745e801f9c50b5ef80252 # v1.4.0
 
       - name: Check format
         run: |
           cargo fmt --all -- --check
 
-      - uses: giraffate/clippy-action@v1
+      - uses: giraffate/clippy-action@13b9d32482f25d29ead141b79e7e04e7900281e0 # v1.0.1
         with:
           reporter: 'github-pr-review'
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
         with:
           components: llvm-tools-preview
           cache-shared-key: setup-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
@@ -91,7 +91,7 @@ jobs:
           cargo install --git https://github.com/aya-rs/aya -- aya-tool
 
       - name: Install tools
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@e30c5b8cfc4910a9f163907c8149ac1e54f1ab11 # v2.62.25
         with:
           tool: cargo-llvm-cov, cargo-nextest
 
@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload coverage
         if: runner.os == 'Linux'
-        uses: k1LoW/octocov-action@v1
+        uses: k1LoW/octocov-action@73d561f65d59e66899ed5c87e4621a913b5d5c20 # v1.5.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
