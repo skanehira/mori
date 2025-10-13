@@ -3,7 +3,7 @@ use thiserror::Error;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-use aya::{BtfError, EbpfError, maps::MapError, programs::ProgramError};
+use aya::{maps::MapError, programs::ProgramError, BtfError, EbpfError};
 use hickory_resolver::ResolveError;
 
 #[cfg(target_os = "linux")]
@@ -136,6 +136,9 @@ pub enum MoriError {
 
     #[error("invalid --allow-network entry '{entry}': {reason}")]
     InvalidAllowNetworkEntry { entry: String, reason: String },
+
+    #[error("unsupported network protocol '{protocol}' in entry '{entry}'")]
+    UnsupportedNetworkProtocol { entry: String, protocol: String },
 
     #[error("failed to spawn command '{command}': {source}")]
     CommandSpawn {
