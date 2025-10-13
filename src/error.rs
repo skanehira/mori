@@ -3,7 +3,7 @@ use thiserror::Error;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-use aya::{maps::MapError, programs::ProgramError, BtfError, EbpfError};
+use aya::{BtfError, EbpfError, maps::MapError, programs::ProgramError};
 use hickory_resolver::ResolveError;
 
 #[cfg(target_os = "linux")]
