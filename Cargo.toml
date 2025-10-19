@@ -15,7 +15,7 @@ keywords = ["security", "sandbox", "ebpf", "network", "filesystem"]
 categories = ["command-line-utilities", "os::linux-apis", "development-tools"]
 
 [dependencies]
-clap = { version = "4.5.48", features = ["derive"] }
+clap = { version = "4.5.49", features = ["derive"] }
 thiserror = "2.0"
 log = "0.4"
 env_logger = "0.11"
