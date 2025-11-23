@@ -39,7 +39,7 @@ aya-log = "0.2.1"
 
 [dev-dependencies]
 rstest = "0.26"
-mockall = "0.13"
+mockall = "0.14"
 tempfile = "3.10"
 
 [build-dependencies]
