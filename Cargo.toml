@@ -43,4 +43,4 @@ mockall = "0.13"
 tempfile = "3.10"
 
 [build-dependencies]
-aya-build = "0.1.2"
+aya-build = "0.1.3"
