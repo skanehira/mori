@@ -1,0 +1,63 @@
+# Build artifacts
+target/
+*.o
+*.so
+*.a
+*.lib
+
+# Cargo lock file (regenerated in container)
+# Note: We keep Cargo.lock in the image to ensure reproducible builds
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git directory
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Documentation (not needed for build)
+docs/
+*.md
+!CLAUDE.md
+
+# Test files
+tests/
+
+# Coverage reports
+lcov.info
+coverage/
+*.profraw
+*.profdata
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Log files
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Docker files (avoid recursion)
+Dockerfile*
+.dockerignore
+docker-compose.yml
+
+# Makefile (not needed in container)
+Makefile
+
+# License files (not needed for build)
+LICENSE*
