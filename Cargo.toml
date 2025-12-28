@@ -40,7 +40,7 @@ aya-log = "0.2.1"
 [dev-dependencies]
 rstest = "0.26"
 mockall = "0.13"
-tempfile = "3.10"
+tempfile = "3.24"
 
 [build-dependencies]
 aya-build = "0.1.3"
