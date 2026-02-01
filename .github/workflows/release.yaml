@@ -113,7 +113,7 @@ jobs:
                   ${{ matrix.artifact_name }}-${{ matrix.asset_suffix }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset_suffix }}${{ runner.os == 'Linux' && format('-kernel-{0}', steps.kernel.outputs.version) || '' }}
           path: '*.tar.gz'
