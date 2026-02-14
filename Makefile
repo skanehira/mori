@@ -19,3 +19,31 @@ test:
 
 test-cov:
 	@cargo llvm-cov nextest --html
+
+# Docker builder image commands
+docker-builder-build:
+	@docker build -f Dockerfile.builder -t mori-builder:latest .
+
+docker-builder-build-amd64:
+	@docker build -f Dockerfile.builder --platform linux/amd64 -t mori-builder:amd64 .
+
+docker-builder-build-arm64:
+	@docker build -f Dockerfile.builder --platform linux/arm64 -t mori-builder:arm64 .
+
+docker-builder-build-multiarch:
+	@docker buildx build -f Dockerfile.builder \
+		--platform linux/amd64,linux/arm64 \
+		-t mori-builder:latest \
+		--load .
+
+docker-build:
+	@docker run --rm \
+		-v $(PWD):/workspace \
+		mori-builder:latest \
+		cargo build --release
+
+docker-shell:
+	@docker run --rm -it \
+		-v $(PWD):/workspace \
+		mori-builder:latest \
+		/bin/bash
