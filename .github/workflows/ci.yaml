@@ -91,7 +91,7 @@ jobs:
           cargo install --git https://github.com/aya-rs/aya -- aya-tool
 
       - name: Install tools
-        uses: taiki-e/install-action@28a9d316db64b78a951f3f8587a5d08cc97ad8eb # v2.65.6
+        uses: taiki-e/install-action@cc33365ec7e3350bc47bf935f247582cc6f68344 # v2.65.12
         with:
           tool: cargo-llvm-cov, cargo-nextest
 
